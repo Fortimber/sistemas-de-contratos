@@ -1,9 +1,10 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "./lib/prisma.js";
+import { authRoutes } from "./modules/auth/auth.routes.js";
+import { protectedContext } from "./plugins/protected-context.js";
 
-const prisma = new PrismaClient();
 const app = Fastify({ logger: true });
 
 await app.register(cors, {
@@ -14,6 +15,9 @@ app.get("/health", async () => {
   await prisma.$queryRaw`SELECT 1`;
   return { status: "ok" };
 });
+
+await app.register(authRoutes, { prefix: "/auth" });
+await app.register(protectedContext);
 
 const port = Number(process.env.API_PORT ?? 3000);
 
