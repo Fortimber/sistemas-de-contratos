@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { authenticate } from "../middleware/auth.js";
 import { attachTenantScope } from "../middleware/tenant-scoping.js";
 import { meRoutes } from "../modules/auth/me.routes.js";
+import { logoutRoutes } from "../modules/auth/logout.routes.js";
 
 /**
  * Contexto protegido: autenticação + tenant-scoping registrados uma única
@@ -15,4 +16,5 @@ export async function protectedContext(app: FastifyInstance) {
   app.addHook("preHandler", attachTenantScope);
 
   await app.register(meRoutes);
+  await app.register(logoutRoutes);
 }

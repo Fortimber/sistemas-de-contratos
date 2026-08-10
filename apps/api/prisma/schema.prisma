@@ -58,9 +58,26 @@ model Usuario {
   anexosEnviados        AnexoContrato[]
   historicoAlteracoes   HistoricoStatusContrato[]
   auditoriaAcoes        AuditoriaContrato[]
+  refreshTokens         RefreshToken[]
 
   @@unique([organizacaoId, login])
   @@map("usuarios")
+}
+
+// Sessões de refresh token — permite revogação (logout, roubo de token,
+// desligamento de usuário), diferente de um JWT stateless puro.
+model RefreshToken {
+  id          String    @id @default(uuid())
+  jti         String    @unique
+  usuarioId   String    @map("usuario_id")
+  usuario     Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  criadoEm    DateTime  @default(now()) @map("criado_em")
+  expiraEm    DateTime  @map("expira_em")
+  revogadoEm  DateTime? @map("revogado_em")
+  userAgent   String?   @map("user_agent")
+  ip          String?
+
+  @@map("refresh_tokens")
 }
 
 // ---------------------------------------------------------------------------

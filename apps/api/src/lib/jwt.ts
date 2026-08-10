@@ -10,6 +10,7 @@ export interface AccessTokenPayload {
 
 export interface RefreshTokenPayload {
   sub: string;
+  jti: string;
 }
 
 function requireEnv(name: string): string {
@@ -39,4 +40,17 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {
   return jwt.verify(token, REFRESH_SECRET) as RefreshTokenPayload;
+}
+
+/**
+ * Lê o claim `exp` de um token já assinado, sem verificar assinatura.
+ * Usado só para saber até quando gravar `expiraEm` no banco — a validade
+ * de verdade continua sendo decidida por `verifyRefreshToken`.
+ */
+export function getTokenExpiry(token: string): Date {
+  const decoded = jwt.decode(token) as { exp?: number } | null;
+  if (!decoded?.exp) {
+    throw new Error("Token sem claim de expiração (exp).");
+  }
+  return new Date(decoded.exp * 1000);
 }
