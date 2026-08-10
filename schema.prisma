@@ -1,0 +1,394 @@
+// Schema inicial — sistema de gestão de contratos de exportação
+// Multi-tenant "preparado, não ativo": toda tabela de negócio carrega organizacaoId.
+// Rodar: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenant
+// ---------------------------------------------------------------------------
+
+model Organizacao {
+  id        String   @id @default(uuid())
+  nome      String
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  usuarios           Usuario[]
+  especies           Especie[]
+  produtos           Produto[]
+  importadores       Importador[]
+  representantes     Representante[]
+  statusContrato     StatusContrato[]
+  contratos          Contrato[]
+
+  @@map("organizacoes")
+}
+
+enum PerfilAcesso {
+  Administrador
+  Comercial
+  Operacional
+  Financeiro
+  Ambiental
+}
+
+model Usuario {
+  id               String       @id @default(uuid())
+  organizacaoId    String       @map("organizacao_id")
+  organizacao      Organizacao  @relation(fields: [organizacaoId], references: [id])
+  login            String
+  email            String
+  senhaHash        String       @map("senha_hash")
+  nomeCompleto     String       @map("nome_completo")
+  perfilAcesso     PerfilAcesso @map("perfil_acesso")
+  deveTrocarSenha  Boolean      @default(false) @map("deve_trocar_senha")
+  criadoEm         DateTime     @default(now()) @map("criado_em")
+  atualizadoEm     DateTime     @updatedAt @map("atualizado_em")
+
+  contratosCriados      Contrato[] @relation("criado_por")
+  contratosAtualizados  Contrato[] @relation("atualizado_por")
+  contratosResponsavel  Contrato[] @relation("responsavel_atual")
+  anexosEnviados        AnexoContrato[]
+  historicoAlteracoes   HistoricoStatusContrato[]
+  auditoriaAcoes        AuditoriaContrato[]
+
+  @@unique([organizacaoId, login])
+  @@map("usuarios")
+}
+
+// ---------------------------------------------------------------------------
+// Tabelas de referência
+// ---------------------------------------------------------------------------
+
+model Especie {
+  id             String      @id @default(uuid())
+  organizacaoId  String      @map("organizacao_id")
+  organizacao    Organizacao @relation(fields: [organizacaoId], references: [id])
+  nomeEspecie    String      @map("nome_especie")
+  criadoEm       DateTime    @default(now()) @map("criado_em")
+  atualizadoEm   DateTime    @updatedAt @map("atualizado_em")
+
+  produtos Produto[]
+
+  @@unique([organizacaoId, nomeEspecie])
+  @@map("especies")
+}
+
+model Produto {
+  id             String      @id @default(uuid())
+  organizacaoId  String      @map("organizacao_id")
+  organizacao    Organizacao @relation(fields: [organizacaoId], references: [id])
+  nomeProduto    String      @map("nome_produto")
+  especieId      String      @map("especie_id")
+  especie        Especie     @relation(fields: [especieId], references: [id])
+  criadoEm       DateTime    @default(now()) @map("criado_em")
+  atualizadoEm   DateTime    @updatedAt @map("atualizado_em")
+
+  contratos Contrato[]
+
+  @@map("produtos")
+}
+
+model Importador {
+  id               String      @id @default(uuid())
+  organizacaoId    String      @map("organizacao_id")
+  organizacao      Organizacao @relation(fields: [organizacaoId], references: [id])
+  nomeRazaoSocial  String      @map("nome_razao_social")
+  pais             String
+  email            String
+  criadoEm         DateTime    @default(now()) @map("criado_em")
+  atualizadoEm     DateTime    @updatedAt @map("atualizado_em")
+
+  contratos Contrato[]
+
+  @@map("importadores")
+}
+
+model Representante {
+  id                 String      @id @default(uuid())
+  organizacaoId      String      @map("organizacao_id")
+  organizacao        Organizacao @relation(fields: [organizacaoId], references: [id])
+  nomeRepresentante  String      @map("nome_representante")
+  email              String
+  criadoEm           DateTime    @default(now()) @map("criado_em")
+  atualizadoEm       DateTime    @updatedAt @map("atualizado_em")
+
+  contratos Contrato[]
+
+  @@map("representantes")
+}
+
+model StatusContrato {
+  id                 String      @id @default(uuid())
+  organizacaoId      String      @map("organizacao_id")
+  organizacao        Organizacao @relation(fields: [organizacaoId], references: [id])
+  nomeStatus         String      @map("nome_status")
+  // Valores originais: Comercial | Produção | Ambiental | Financeiro | Logística
+  setorResponsavel   String      @map("setor_responsavel")
+  ordem              Int
+  criadoEm           DateTime    @default(now()) @map("criado_em")
+  atualizadoEm       DateTime    @updatedAt @map("atualizado_em")
+
+  contratos          Contrato[]
+  historicoAnterior  HistoricoStatusContrato[] @relation("status_anterior")
+  historicoNovo      HistoricoStatusContrato[] @relation("status_novo")
+
+  @@unique([organizacaoId, nomeStatus])
+  @@map("status_contrato")
+}
+
+// ---------------------------------------------------------------------------
+// Contrato (entidade central)
+// ---------------------------------------------------------------------------
+
+enum TipoContrato {
+  Original
+  Aditivo
+}
+
+enum TipoFrete {
+  FOB
+  CFR
+  CIF
+}
+
+model Contrato {
+  id                             String         @id @default(uuid())
+  organizacaoId                  String         @map("organizacao_id")
+  organizacao                    Organizacao    @relation(fields: [organizacaoId], references: [id])
+  numeroContrato                 String         @map("numero_contrato")
+
+  importadorId                   String         @map("importador_id")
+  importador                     Importador     @relation(fields: [importadorId], references: [id])
+  representanteId                String         @map("representante_id")
+  representante                  Representante  @relation(fields: [representanteId], references: [id])
+  produtoId                      String         @map("produto_id")
+  produto                        Produto        @relation(fields: [produtoId], references: [id])
+  statusId                       String         @map("status_id")
+  status                         StatusContrato @relation(fields: [statusId], references: [id])
+
+  tipoContrato                   TipoContrato   @map("tipo_contrato")
+  dataContrato                   DateTime       @map("data_contrato") @db.Date
+  volumeM3                       Float          @map("volume_m3")
+  qtdContainers                  Int            @map("qtd_containers")
+  // Valores originais: Belém | Santarém | Paragominas | Portel | Breves
+  local                          String
+
+  tipoFrete                      TipoFrete      @map("tipo_frete")
+  requerFumigacao                Boolean        @default(false) @map("requer_fumigacao")
+  certificacaoProcessoOrigem     Boolean        @default(false) @map("certificacao_processo_origem")
+  requerCites                    Boolean        @default(false) @map("requer_cites")
+  requerFsc                      Boolean        @default(false) @map("requer_fsc")
+
+  comissaoPct                    Float?         @map("comissao_pct")
+  comissaoMetragem                Float?         @map("comissao_metragem")
+  valorTotalUsd                  Float          @map("valor_total_usd")
+  // Valores originais: USD | EUR | BRL | GBP | CNY
+  moedaValorTotal                String         @map("moeda_valor_total")
+
+  // Valores originais: "À vista" | "Parcelado"
+  modalidadePgtContaBrasil       String         @map("modalidade_pgt_conta_brasil")
+  modalidadePgtContaExterior     String         @map("modalidade_pgt_conta_exterior")
+
+  contratoPaiId                  String?        @map("contrato_pai_id")
+  contratoPai                    Contrato?      @relation("contrato_aditivo", fields: [contratoPaiId], references: [id])
+  aditivos                       Contrato[]     @relation("contrato_aditivo")
+
+  criadoPorId                    String?        @map("criado_por")
+  criadoPor                      Usuario?       @relation("criado_por", fields: [criadoPorId], references: [id])
+  atualizadoPorId                String?        @map("atualizado_por")
+  atualizadoPor                  Usuario?       @relation("atualizado_por", fields: [atualizadoPorId], references: [id])
+  responsavelAtualId             String?        @map("responsavel_atual_id")
+  responsavelAtual               Usuario?       @relation("responsavel_atual", fields: [responsavelAtualId], references: [id])
+
+  criadoEm                       DateTime       @default(now()) @map("criado_em")
+  atualizadoEm                   DateTime       @updatedAt @map("atualizado_em")
+
+  historico           HistoricoStatusContrato[]
+  auditoria            AuditoriaContrato[]
+  anexos               AnexoContrato[]
+  detalhesProducao     DetalhesProducao?
+  detalhesAmbiental    DetalhesAmbiental?
+  detalhesLogistica    DetalhesLogistica?
+  detalhesFinanceiro   DetalhesFinanceiro?
+
+  @@unique([organizacaoId, numeroContrato])
+  @@map("contratos")
+}
+
+// Append-only — bloquear UPDATE/DELETE via permissão de role no banco
+model HistoricoStatusContrato {
+  id                  String          @id @default(uuid())
+  contratoId          String          @map("contrato_id")
+  contrato            Contrato        @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  statusAnteriorId    String?         @map("status_anterior_id")
+  statusAnterior      StatusContrato? @relation("status_anterior", fields: [statusAnteriorId], references: [id])
+  statusNovoId        String          @map("status_novo_id")
+  statusNovo          StatusContrato  @relation("status_novo", fields: [statusNovoId], references: [id])
+  alteradoPorId       String?         @map("alterado_por")
+  alteradoPor         Usuario?        @relation(fields: [alteradoPorId], references: [id])
+  observacao          String?
+  dataAlteracao       DateTime        @default(now()) @map("data_alteracao")
+
+  @@map("historico_status_contrato")
+}
+
+enum AcaoAuditoria {
+  Criacao  @map("Criação")
+  Edicao   @map("Edição")
+  Exclusao @map("Exclusão")
+}
+
+// Append-only — bloquear UPDATE/DELETE via permissão de role no banco
+model AuditoriaContrato {
+  id              String        @id @default(uuid())
+  contratoId      String        @map("contrato_id")
+  contrato        Contrato      @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  usuarioId       String?       @map("usuario_id")
+  usuario         Usuario?      @relation(fields: [usuarioId], references: [id])
+  acao            AcaoAuditoria
+  campoAlterado   String?       @map("campo_alterado")
+  valorAnterior   String?       @map("valor_anterior")
+  valorNovo       String?       @map("valor_novo")
+  dataHora        DateTime      @default(now()) @map("data_hora")
+
+  @@map("auditoria_contratos")
+}
+
+model AnexoContrato {
+  id             String    @id @default(uuid())
+  contratoId     String    @map("contrato_id")
+  contrato       Contrato  @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  nomeArquivo    String?   @map("nome_arquivo")
+  // chave/path no storage S3-compatible (não o binário)
+  arquivoUrl     String    @map("arquivo_url")
+  // Valores originais: Contrato original | Aditivo | Romaneio | CoC | Nota fiscal | Outro
+  tipoDocumento  String    @map("tipo_documento")
+  enviadoPorId   String?   @map("enviado_por")
+  enviadoPor     Usuario?  @relation(fields: [enviadoPorId], references: [id])
+  enviadoEm      DateTime  @default(now()) @map("enviado_em")
+
+  @@map("anexos_contrato")
+}
+
+// ---------------------------------------------------------------------------
+// Detalhes por setor (extensão 1:1 de contrato — cada setor escreve na sua)
+// ---------------------------------------------------------------------------
+
+model DetalhesProducao {
+  id                          String   @id @default(uuid())
+  contratoId                  String   @unique @map("contrato_id")
+  contrato                    Contrato @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  numeroRomaneio               String?  @map("numero_romaneio")
+  volumeRomaneioM3             Float?   @map("volume_romaneio_m3")
+  qtdContainersConfirmada      Int?     @map("qtd_containers_confirmada")
+  observacoesProducao          String?  @map("observacoes_producao")
+  dataCocEnviadaDespachante    DateTime? @map("data_coc_enviada_despachante") @db.Date
+  criadoEm                    DateTime @default(now()) @map("criado_em")
+  atualizadoEm                DateTime @updatedAt @map("atualizado_em")
+
+  @@map("detalhes_producao")
+}
+
+model DetalhesAmbiental {
+  id                         String    @id @default(uuid())
+  contratoId                 String    @unique @map("contrato_id")
+  contrato                   Contrato  @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  autef                      String?
+  lpcoNumero                 String?   @map("lpco_numero")
+  // Valores originais: Em análise | Protocolada | Deferida | Indeferida
+  lpcoStatus                 String?   @map("lpco_status")
+  lpcoDataProtocolo          DateTime? @map("lpco_data_protocolo") @db.Date
+  lpcoDataValidade           DateTime? @map("lpco_data_validade") @db.Date
+  citesNumeroRequerimento    String?   @map("cites_numero_requerimento")
+  citesNumero                String?   @map("cites_numero")
+  citesDataEntrada           DateTime? @map("cites_data_entrada") @db.Date
+  citesDataValidade          DateTime? @map("cites_data_validade") @db.Date
+  // Valores originais: Não se aplica | Em análise | Deferida | Indeferida
+  citesStatus                String?   @map("cites_status")
+  gfNumero                   String?   @map("gf_numero")
+  gfDataVencimento           DateTime? @map("gf_data_vencimento") @db.Date
+  gfDataRecebimentoSisflora  DateTime? @map("gf_data_recebimento_sisflora") @db.Date
+  dofDataRegistro            DateTime? @map("dof_data_registro") @db.Date
+  // Valores originais: Pendente | Aprovado | Reprovado
+  statusAprovacaoCocCliente  String?   @map("status_aprovacao_coc_cliente")
+  criadoEm                   DateTime  @default(now()) @map("criado_em")
+  atualizadoEm                DateTime @updatedAt @map("atualizado_em")
+
+  @@map("detalhes_ambiental")
+}
+
+model DetalhesLogistica {
+  id                             String    @id @default(uuid())
+  contratoId                     String    @unique @map("contrato_id")
+  contrato                       Contrato  @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  ciaMaritima                    String?   @map("cia_maritima")
+  nomeNavio                      String?   @map("nome_navio")
+  booking                        String?
+  containerNumero                String?   @map("container_numero")
+  dataPrancha                    DateTime? @map("data_prancha") @db.Date
+  dataDraftDocumentos            DateTime? @map("data_draft_documentos") @db.Date
+  dataDraftCarga                 DateTime? @map("data_draft_carga") @db.Date
+  dataColetaContainer            DateTime? @map("data_coleta_container") @db.Date
+  dataPosEmbarqueDocsCliente     DateTime? @map("data_pos_embarque_docs_cliente") @db.Date
+  dataEntradaPortoDestino        DateTime? @map("data_entrada_porto_destino") @db.Date
+  dataPrevistaSaidaNavio         DateTime? @map("data_prevista_saida_navio") @db.Date
+  dataNavioNoDestino             DateTime? @map("data_navio_no_destino") @db.Date
+  blNumero                       String?   @map("bl_numero")
+  blData                         DateTime? @map("bl_data") @db.Date
+  portoDestinoPais               String?   @map("porto_destino_pais")
+  motorista                      String?
+  placaVeiculo                   String?   @map("placa_veiculo")
+  // Valores originais: Sim | Não
+  pagamentoBl                    String?   @map("pagamento_bl")
+  criadoEm                       DateTime  @default(now()) @map("criado_em")
+  atualizadoEm                    DateTime @updatedAt @map("atualizado_em")
+
+  @@map("detalhes_logistica")
+}
+
+model DetalhesFinanceiro {
+  id                              String    @id @default(uuid())
+  contratoId                      String    @unique @map("contrato_id")
+  contrato                        Contrato  @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  nfNumero                        String?   @map("nf_numero")
+  nfData                          DateTime? @map("nf_data") @db.Date
+  nfVolumeM3                      Float?    @map("nf_volume_m3")
+  nfValorReais                    Float?    @map("nf_valor_reais")
+  invoiceNumero                   String?   @map("invoice_numero")
+  invoiceValor                    Float?    @map("invoice_valor")
+  dataFechamentoCambio             DateTime? @map("data_fechamento_cambio") @db.Date
+  banco                           String?
+  moedaCambial                    String?   @map("moeda_cambial")
+  taxaCambial                     Float?    @map("taxa_cambial")
+  valorRecebidoReais               Float?    @map("valor_recebido_reais")
+  statusEmbarqueXCambio            String?   @map("status_embarque_x_cambio")
+  statusGeralCambio                String?   @map("status_geral_cambio")
+  formaPagamento                  String?   @map("forma_pagamento")
+  comissaoSobreVenda              Boolean?  @default(false) @map("comissao_sobre_venda")
+  valorComissaoReais               Float?    @map("valor_comissao_reais")
+  valorComissaoDolar               Float?    @map("valor_comissao_dolar")
+  taxasLocaisReais                 Float?    @map("taxas_locais_reais")
+  taxaScannerReais                 Float?    @map("taxa_scanner_reais")
+  taxaDetentionsReais              Float?    @map("taxa_detentions_reais")
+  taxaCertificadoOrigemReais       Float?    @map("taxa_certificado_origem_reais")
+  taxaCertificadoFitosanitarioReais Float?   @map("taxa_certificado_fitosanitario_reais")
+  taxaCertificadoFumigacaoReais    Float?    @map("taxa_certificado_fumigacao_reais")
+  taxaWaybillReais                 Float?    @map("taxa_waybill_reais")
+  taxaCitesReais                   Float?    @map("taxa_cites_reais")
+  freteReais                       Float?    @map("frete_reais")
+  taxaLpcoReais                    Float?    @map("taxa_lpco_reais")
+  despachanteReais                 Float?    @map("despachante_reais")
+  dhlReais                         Float?    @map("dhl_reais")
+  criadoEm                        DateTime  @default(now()) @map("criado_em")
+  atualizadoEm                     DateTime @updatedAt @map("atualizado_em")
+
+  @@map("detalhes_financeiro")
+}
