@@ -7,13 +7,46 @@
 export interface ApiResult {
   status: number;
   json: any;
+  /** Cada Set-Cookie desta resposta, nome -> valor (sem os atributos: Path, HttpOnly, ...). Vazio se não houve nenhum. */
+  cookies: Record<string, string>;
+  /** Os headers Set-Cookie desta resposta, crus (com atributos) — pra quem precisa checar HttpOnly/Path/SameSite, não só o valor. */
+  setCookieHeaders: string[];
 }
 
-export type ApiClient = (method: string, path: string, opts?: { token?: string; body?: unknown }) => Promise<ApiResult>;
+export type ApiClient = (
+  method: string,
+  path: string,
+  opts?: {
+    token?: string;
+    body?: unknown;
+    /**
+     * Header Cookie explícito, sobrepõe o cookie jar interno pra esta
+     * chamada — usado pelo smoke test da Fase 1 (cookie auth) pra reenviar
+     * de propósito uma cookie já revogada/antiga (ver
+     * smoke-test-fase1-cookie-auth.ts, passo 4).
+     */
+    cookie?: string;
+  },
+) => Promise<ApiResult>;
 
-/** Cliente HTTP mínimo contra uma API já no ar (fetch nativo do Node 22+). */
+/**
+ * Cliente HTTP mínimo contra uma API já no ar (fetch nativo do Node 22+).
+ *
+ * Mantém um "cookie jar" simples (nome -> valor) no closure: o fetch nativo
+ * do Node, ao contrário de um navegador, não guarda cookies entre chamadas
+ * sozinho. Introduzido na Fase 1 (cookie httpOnly pro refresh token) — toda
+ * chamada reenvia automaticamente as cookies recebidas nas respostas
+ * anteriores desta mesma instância de client, do jeito que um navegador
+ * faria. Um Set-Cookie com valor vazio (ex.: logout limpando a cookie) some
+ * do jar, não fica sendo reenviado com valor vazio.
+ */
 export function makeApiClient(baseUrl: string): ApiClient {
+  const cookieJar = new Map<string, string>();
+
   return async function api(method, path, opts = {}) {
+    const cookieHeader =
+      opts.cookie ?? ([...cookieJar.entries()].map(([name, value]) => `${name}=${value}`).join("; ") || undefined);
+
     // Content-Type só quando há body de verdade — Fastify rejeita
     // "application/json" com corpo vazio (ex.: nos DELETEs sem body).
     const res = await fetch(`${baseUrl}${path}`, {
@@ -21,11 +54,28 @@ export function makeApiClient(baseUrl: string): ApiClient {
       headers: {
         ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
+
+    const setCookieHeaders = res.headers.getSetCookie();
+    const cookies: Record<string, string> = {};
+    for (const setCookie of setCookieHeaders) {
+      const [pair] = setCookie.split(";");
+      const eqIdx = pair.indexOf("=");
+      const name = pair.slice(0, eqIdx).trim();
+      const value = pair.slice(eqIdx + 1).trim();
+      cookies[name] = value;
+      if (value) {
+        cookieJar.set(name, value);
+      } else {
+        cookieJar.delete(name);
+      }
+    }
+
     const text = await res.text();
-    return { status: res.status, json: text ? JSON.parse(text) : null };
+    return { status: res.status, json: text ? JSON.parse(text) : null, cookies, setCookieHeaders };
   };
 }
 

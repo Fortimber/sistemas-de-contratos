@@ -15,9 +15,11 @@
     "smoke:fase3-ambiental": "tsx scripts/smoke-test-fase3-ambiental.ts",
     "smoke:fase3-logistica": "tsx scripts/smoke-test-fase3-logistica.ts",
     "smoke:fase3-financeiro": "tsx scripts/smoke-test-fase3-financeiro.ts",
-    "smoke:fase4": "tsx scripts/smoke-test-fase4.ts"
+    "smoke:fase4": "tsx scripts/smoke-test-fase4.ts",
+    "smoke:fase1-cookie-auth": "tsx scripts/smoke-test-fase1-cookie-auth.ts"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^10.0.1",
     "@prisma/client": "^6.1.0",
     "bcrypt": "^5.1.1",

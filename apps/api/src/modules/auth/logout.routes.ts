@@ -1,19 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { logout, InvalidRefreshTokenError } from "./auth.service.js";
-
-const logoutBodySchema = {
-  type: "object",
-  required: ["refreshToken"],
-  additionalProperties: false,
-  properties: {
-    refreshToken: { type: "string", minLength: 1 },
-  },
-} as const;
+import { clearRefreshCookie, REFRESH_COOKIE_NAME } from "../../lib/refresh-cookie.js";
 
 /** Registrada dentro do contexto protegido (plugins/protected-context.ts). */
 export async function logoutRoutes(app: FastifyInstance) {
-  app.post("/auth/logout", { schema: { body: logoutBodySchema } }, async (request, reply) => {
-    const { refreshToken } = request.body as { refreshToken: string };
+  app.post("/auth/logout", async (request, reply) => {
+    const refreshToken = request.cookies[REFRESH_COOKIE_NAME];
+    if (!refreshToken) {
+      return reply.code(401).send({ message: "Refresh token ausente." });
+    }
 
     try {
       await logout(refreshToken, request.user!.id);
@@ -24,6 +19,7 @@ export async function logoutRoutes(app: FastifyInstance) {
       throw err;
     }
 
+    clearRefreshCookie(reply);
     return reply.code(204).send();
   });
 }

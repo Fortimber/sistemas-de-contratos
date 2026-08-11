@@ -56,21 +56,38 @@ migration e em `lib/prisma.ts`).
 
 ## Testando o login (Fase 1)
 
+Dois tokens, dois lugares diferentes — de propósito:
+
+- **`accessToken`**: volta no corpo JSON de `/auth/login` e `/auth/refresh`.
+  O frontend guarda em memória (variável JS, nunca em `localStorage` nem em
+  cookie legível por JS) e manda em `Authorization: Bearer <accessToken>` em
+  toda chamada às rotas protegidas. Vida curta (padrão 15 min) — se vazar
+  (XSS, log, etc.), o estrago tem prazo de validade.
+- **`refreshToken`**: NUNCA aparece no corpo JSON. Vem só como cookie
+  `httpOnly` (`Set-Cookie`, `path=/auth`), então nenhum JavaScript no
+  navegador consegue ler o valor — só o próprio navegador reenvia a cookie
+  automaticamente pras rotas de auth. Atributos da cookie: `HttpOnly`,
+  `SameSite=Strict`, `Secure` (só quando `NODE_ENV=production` — em dev a
+  API roda em `http://localhost`, e `Secure` bloquearia o navegador de
+  devolver a cookie nesse caso), `Max-Age` de 7 dias.
+
 ```bash
-# login com o admin criado pelo seed (login/senha vêm do .env)
-curl -s -X POST http://localhost:3000/auth/login \
+# login com o admin criado pelo seed (login/senha vêm do .env). -c salva a
+# cookie recebida (refreshToken) num cookie jar local do curl, -b reenvia.
+curl -s -c cookies.txt -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"login":"admin","senha":"troque-esta-senha"}'
-# -> { accessToken, refreshToken, usuario: {...} }
+# -> { accessToken, usuario: {...} } — SEM refreshToken no corpo
 
 # rota protegida — precisa do accessToken no header Authorization
 curl -s http://localhost:3000/auth/me \
   -H "Authorization: Bearer <accessToken>"
 
-# renovar o access token quando expirar (padrão: 15 min)
-curl -s -X POST http://localhost:3000/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refreshToken":"<refreshToken>"}'
+# renovar o access token quando expirar (padrão: 15 min) — sem body, o
+# refreshToken vem da cookie (-b reenvia a que foi salva no login)
+curl -s -c cookies.txt -b cookies.txt -X POST http://localhost:3000/auth/refresh
+# -> { accessToken, usuario: {...} } — de novo sem refreshToken no corpo, e
+#    com uma NOVA cookie refreshToken (rotação, ver seção seguinte)
 ```
 
 Sem o header `Authorization`, ou com um `accessToken` inválido/expirado, `/auth/me`
@@ -79,6 +96,13 @@ responde `401`. As rotas protegidas ficam registradas em
 passa por autenticação (JWT) e tenant-scoping (Prisma filtrado por
 `organizacaoId` do usuário logado), sem precisar repetir isso rota a rota.
 
+CORS está configurado com `credentials: true` e `origin` explícita
+(`WEB_ORIGIN`, nunca `"*"` — o navegador rejeita `credentials: true` junto
+com origin coringa) em `apps/api/src/server.ts`, exigido pra cookie
+cross-origin funcionar entre API e frontend em portas diferentes. O
+frontend precisa mandar `credentials: "include"` em todo `fetch`/`axios`
+pras rotas de `/auth/*` pra cookie ir e voltar.
+
 ## Sessões e revogação de refresh token
 
 Cada refresh token emitido vira uma linha em `refresh_tokens` (tabela
@@ -86,13 +110,11 @@ Cada refresh token emitido vira uma linha em `refresh_tokens` (tabela
 — algo que um JWT puro, sozinho, não permite.
 
 ```bash
-# logout — revoga a sessão referente a ESSE refresh token específico
-# (rota protegida: precisa do accessToken também)
-curl -s -i -X POST http://localhost:3000/auth/logout \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <accessToken>" \
-  -d '{"refreshToken":"<refreshToken>"}'
-# -> 204 No Content
+# logout — revoga a sessão referente ao refreshToken da cookie atual
+# (rota protegida: precisa do accessToken também) e limpa a cookie na resposta
+curl -s -i -b cookies.txt -X POST http://localhost:3000/auth/logout \
+  -H "Authorization: Bearer <accessToken>"
+# -> 204 No Content, com Set-Cookie limpando refreshToken (Max-Age=0)
 ```
 
 Regras aplicadas em `POST /auth/refresh`:
@@ -114,6 +136,22 @@ original** (o de antes da rotação) — a API derruba a sessão nova também,
 mesmo essa nunca tendo sido comprometida, porque não há como distinguir
 "dono legítimo tentando reusar por engano" de "atacante com o token antigo"
 depois que a rotação já aconteceu uma vez.
+
+### Smoke test automatizado (Fase 1)
+
+`apps/api/scripts/smoke-test-fase1-cookie-auth.ts` cobre o fluxo de
+autenticação por cookie de ponta a ponta: login (`accessToken` no JSON,
+`refreshToken` só na cookie httpOnly), refresh usando a cookie capturada
+(confirma a rotação), logout (cookie limpa na resposta), refresh reenviando
+de propósito a cookie antiga/revogada depois do logout (`401`), e refresh
+sem cookie nenhuma (`401`). Foi o primeiro smoke test a lidar com cookie —
+o cliente HTTP compartilhado (`scripts/smoke-test-helpers.ts`) ganhou um
+cookie jar simples pra isso, reutilizável por qualquer script futuro que
+precise.
+
+```bash
+docker compose exec api npm run smoke:fase1-cookie-auth
+```
 
 ## Testando RLS (Fase 1)
 
@@ -617,18 +655,21 @@ tudo no final, sucesso ou falha.
 docker compose exec api npm run smoke:fase3-financeiro
 ```
 
-Com a Fase 3 completa, os 5 smoke tests (`fase2`, `fase3-producao`,
-`fase3-ambiental`, `fase3-logistica`, `fase3-financeiro`) devem ser
+Com auth por cookie (Fase 1), Fase 2, Fase 3 (completa) e Fase 4 no ar, os 7
+smoke tests (`fase1-cookie-auth`, `fase2`, `fase3-producao`,
+`fase3-ambiental`, `fase3-logistica`, `fase3-financeiro`, `fase4`) devem ser
 reconfirmados juntos sempre que houver mudança de schema ou nos módulos
 compartilhados (`middleware/`, `lib/`, `scripts/smoke-test-helpers.ts`,
 `scripts/smoke-test-fixtures.ts`):
 
 ```bash
+docker compose exec api npm run smoke:fase1-cookie-auth && \
 docker compose exec api npm run smoke:fase2 && \
 docker compose exec api npm run smoke:fase3-producao && \
 docker compose exec api npm run smoke:fase3-ambiental && \
 docker compose exec api npm run smoke:fase3-logistica && \
-docker compose exec api npm run smoke:fase3-financeiro
+docker compose exec api npm run smoke:fase3-financeiro && \
+docker compose exec api npm run smoke:fase4
 ```
 
 ## Estrutura
