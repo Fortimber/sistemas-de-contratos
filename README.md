@@ -115,6 +115,121 @@ mesmo essa nunca tendo sido comprometida, porque não há como distinguir
 "dono legítimo tentando reusar por engano" de "atacante com o token antigo"
 depois que a rotação já aconteceu uma vez.
 
+## Testando RLS (Fase 1)
+
+Este teste prova que o isolamento entre organizações funciona **no banco**,
+não só no código da API: você vai ler uma tabela via SQL puro (sem passar
+pela API, sem `.where()` de aplicação nenhum) e ver o Postgres recusar dado
+de outra organização, mesmo pedindo por ele explicitamente.
+
+Rode os comandos abaixo, na ordem, a partir da raiz do repositório (onde
+está o `.env`). Todos os blocos `bash` são pra colar no seu terminal normal
+(Git Bash, se estiver no Windows — o mesmo terminal usado pros comandos
+`curl` acima).
+
+### Passo 0 — descubra o id da sua organização real
+
+```bash
+docker compose exec postgres psql -U contratos -d sistema_contratos \
+  -c "SELECT id, nome FROM organizacoes;"
+```
+
+**Resultado esperado:** uma linha, com um UUID na coluna `id` e o nome da
+sua empresa (o que você configurou em `SEED_ORG_NOME`). Copie esse UUID —
+vamos chamar ele de `<SUA_ORG_ID>` nos próximos passos.
+
+### Passo 1 — criar uma organização + usuário de teste
+
+Ids fixos e fáceis de reconhecer (`9999...` pra organização, `8888...` pro
+usuário), pra não confundir com dado real depois.
+
+```bash
+docker compose exec -T postgres psql -U contratos -d sistema_contratos <<'EOF'
+INSERT INTO organizacoes (id, nome, criado_em)
+VALUES ('99999999-9999-9999-9999-999999999999', 'Empresa Teste RLS', now())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO usuarios (id, organizacao_id, login, email, senha_hash, nome_completo, perfil_acesso, deve_trocar_senha, criado_em, atualizado_em)
+VALUES ('88888888-8888-8888-8888-888888888888', '99999999-9999-9999-9999-999999999999', 'usuario-teste-rls', 'teste-rls@example.com', 'hash-nao-usado-neste-teste', 'Usuario Teste RLS', 'Administrador', false, now(), now())
+ON CONFLICT (id) DO NOTHING;
+
+SELECT 'organizacao e usuario de teste criados' AS status;
+EOF
+```
+
+**Resultado esperado:** duas linhas `INSERT 0 1`, seguidas de uma tabela com
+`organizacao e usuario de teste criados`. (Esse comando roda como
+`contratos`, o role administrativo — não é o caminho que a API usa de
+verdade, é só pra preparar o cenário do teste.)
+
+### Passo 2 — entrar no banco como o mesmo role que a API usa (`app_runtime`)
+
+```bash
+export $(grep -E '^APP_DB_PASSWORD=' .env | xargs)
+docker compose exec -e PGPASSWORD="$APP_DB_PASSWORD" postgres psql -h localhost -U app_runtime -d sistema_contratos
+```
+
+**Resultado esperado:** o prompt muda pra `sistema_contratos=>` — você está
+agora dentro de uma sessão `psql` interativa, conectado como `app_runtime`
+(o role restrito, sem `SUPERUSER`/`BYPASSRLS`, sujeito à RLS igual a API é).
+Deixe essa janela aberta pros próximos dois passos.
+
+### Passo 3 — tentar ler o usuário de teste a partir do contexto da SUA empresa (esperado: vazio)
+
+Cole o bloco abaixo **dentro do prompt `psql` aberto no Passo 2**,
+substituindo `<SUA_ORG_ID>` pelo UUID que você copiou no Passo 0:
+
+```sql
+BEGIN;
+SELECT set_config('app.current_organizacao_id', '<SUA_ORG_ID>', true);
+SELECT id, login, organizacao_id FROM usuarios WHERE organizacao_id = '99999999-9999-9999-9999-999999999999';
+ROLLBACK;
+```
+
+**Resultado esperado:** `(0 rows)` na segunda consulta. Repare que o
+`WHERE organizacao_id = '99999999-...'` está pedindo explicitamente o
+usuário da organização de teste — não tem filtro por engano nem falta de
+filtro aqui. Mesmo assim, zero linhas: o Postgres barrou a leitura porque o
+`set_config` diz que o contexto atual é a SUA organização, não a de teste.
+Isso é o Postgres decidindo, não a query.
+
+### Passo 4 — trocar o contexto pra organização de teste (esperado: aparece)
+
+Ainda no mesmo prompt `psql`:
+
+```sql
+BEGIN;
+SELECT set_config('app.current_organizacao_id', '99999999-9999-9999-9999-999999999999', true);
+SELECT id, login, organizacao_id FROM usuarios WHERE organizacao_id = '99999999-9999-9999-9999-999999999999';
+ROLLBACK;
+```
+
+**Resultado esperado:** `(1 row)`, com `login = usuario-teste-rls` e
+`organizacao_id = 99999999-9999-9999-9999-999999999999`. Mesma query de
+antes, único que mudou foi o `set_config` — prova que não é "sempre vazio",
+é isolamento de verdade por organização.
+
+Digite `\q` e Enter pra sair do `psql`.
+
+> **Se o Passo 3 retornar 1 linha em vez de 0:** algo está errado com a RLS
+> (policy removida, `FORCE` desabilitado, ou a API voltou a usar o role
+> `contratos` em vez de `app_runtime`) — vale investigar antes de confiar
+> no isolamento entre organizações.
+
+### Passo 5 — limpar a organização de teste
+
+```bash
+docker compose exec -T postgres psql -U contratos -d sistema_contratos <<'EOF'
+DELETE FROM usuarios WHERE id = '88888888-8888-8888-8888-888888888888';
+DELETE FROM organizacoes WHERE id = '99999999-9999-9999-9999-999999999999';
+SELECT 'org e usuario de teste removidos' AS status;
+EOF
+```
+
+**Resultado esperado:** duas linhas `DELETE 1`, seguidas de
+`org e usuario de teste removidos`. Depois disso o banco volta a ter só a
+sua organização real e o usuário admin do seed.
+
 ## Estrutura
 
 ```
