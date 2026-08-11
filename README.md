@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais** (Produção, Ambiental e Logística validados; Financeiro ainda não — ver seção 7).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais completa** (Produção, Ambiental, Logística e Financeiro; ver seção 7). Próxima: Fase 4 (auditoria/histórico).
 
 ## Rodando localmente (Docker)
 
@@ -347,12 +347,42 @@ scoping, RLS ou nesses módulos:
 docker compose exec api npm run smoke:fase2
 ```
 
-## Módulos setoriais (Fase 3 — Produção, Ambiental e Logística)
+## Módulos setoriais (Fase 3 — completa)
 
 Cada setor (Produção, Ambiental, Logística, Financeiro) é uma extensão 1:1
 de `contratos` — uma linha por contrato, preenchida aos poucos pelo setor
-responsável. Financeiro ainda **não** existe; cada setor é validado com seu
-próprio smoke test antes do próximo entrar.
+responsável. Os quatro estão implementados e validados; cada um foi
+validado com seu próprio smoke test antes do próximo entrar.
+
+### Precisão monetária: Decimal, não Float (mudança nesta rodada)
+
+A entrada de Financeiro trouxe uma migração de schema que também afeta
+`contratos`: `comissaoPct`, `comissaoMetragem` e `valorTotalUsd` — que já
+existiam desde a Fase 2 — migraram de `Float` para `Decimal` (`numeric` no
+Postgres), porque `Float` (double precision) tem erro de arredondamento
+conhecido e inaceitável pra valor monetário. O mesmo vale para todos os
+campos de valor de `detalhes_financeiro` (exceto `nfVolumeM3`, que é volume
+e continua `Float`, e `taxaCambial`, que usa `Decimal(10, 6)` por precisar
+de mais casas decimais que reais/dólares).
+
+**Efeito colateral tratado explicitamente**: em runtime, um campo `Decimal`
+do Prisma é um objeto (`Prisma.Decimal`), não um `number` do JS. Nenhuma
+rota desse projeto declara `schema.response`, então o Fastify serializa a
+resposta com `JSON.stringify()` puro — que respeita o `toJSON()` do
+`Decimal`, retornando **string**. Ou seja: campos monetários chegam no JSON
+da API como string, já arredondados pra escala da coluna (ex.:
+`"valorTotalUsd":"12345.68"`, não `12345.68` sem aspas). Essa é uma decisão
+deliberada (evita reintroduzir erro de arredondamento de float bem na
+resposta da API), documentada nos comentários de `contratos.routes.ts` e
+`detalhes-financeiro.routes.ts` — cliente HTTP deve tratar esses campos
+como string e converter (`Number(...)`) só na hora de fazer conta, não
+assumir `number` direto.
+
+O código de `contratos.routes.ts` da Fase 2 não precisou de nenhuma mudança
+de lógica por causa disso — só ganhou `minimum: 0` nos três campos
+monetários (mesma validação usada em Financeiro) e o comentário explicando
+a serialização. Reconfirmado com o smoke test da Fase 2 depois da migração
+(ver "Smoke test automatizado" de cada setor abaixo).
 
 ### Produção (`detalhes_producao`)
 
@@ -529,6 +559,78 @@ inexistente (`404`). Limpa tudo no final, sucesso ou falha.
 docker compose exec api npm run smoke:fase3-logistica
 ```
 
+### Financeiro (`detalhes_financeiro`)
+
+```bash
+GET /contratos/:contratoId/financeiro   # 404 se ainda não foi preenchido
+PUT /contratos/:contratoId/financeiro   # upsert — cria se não existe, atualiza se já existe
+```
+
+Body de `PUT` (todos os campos são opcionais — mesmo espírito dos setores
+anteriores; ver lista completa de campos no `schema.prisma`, model
+`DetalhesFinanceiro`):
+
+```json
+{
+  "invoiceNumero": "INV-2026-001",
+  "invoiceValor": 45000.50,
+  "freteReais": 1500.50,
+  "taxaCambial": 5.4321,
+  "valorRecebidoReais": 240000,
+  "comissaoSobreVenda": true,
+  "valorComissaoReais": 2000
+}
+```
+
+- Mesma checagem de `contratoId` (existe e pertence à sua organização antes
+  do upsert — `404` claro, nunca `500`) e mesma defesa em profundidade via
+  RLS que os outros três setores.
+- Todo campo monetário (`Decimal`), se enviado, precisa ser `>= 0` — `400`
+  se negativo. Ver seção "Precisão monetária" acima sobre `Decimal` vs
+  `Float` e como esses valores chegam na resposta (**string**, não number).
+- `taxaCambial`, se enviado, precisa ser `> 0` (câmbio zero ou negativo não
+  faz sentido) — `400` se `<= 0`.
+- **Sem validação de valores fixos** pra `statusEmbarqueXCambio`,
+  `statusGeralCambio` e `formaPagamento` (mesma situação das datas de
+  Logística — sem lista documentada ainda; `TODO` no código). **Sem
+  validação cruzada** entre `comissaoSobreVenda=true` e os campos de
+  comissão estarem preenchidos — regra de negócio não confirmada, decisão
+  em aberto também marcada no código.
+- **Permissões**: leitura (`GET`) liberada a qualquer perfil autenticado.
+  Escrita (`PUT`) restrita a `Administrador` e `Financeiro` — usa o perfil
+  dedicado do enum `PerfilAcesso` (igual Ambiental, diferente de Produção/
+  Logística que precisaram se aproximar de `Operacional`).
+
+### Smoke test automatizado (Fase 3 — Financeiro)
+
+`apps/api/scripts/smoke-test-fase3-financeiro.ts` reaproveita os mesmos
+helpers/fixtures das rodadas anteriores. Além do CRUD (`GET` antes de
+existir `404`, `PUT` criando, `GET` depois, `PUT` atualizando sem duplicar,
+campo monetário negativo `400`, `taxaCambial=0` `400`, usuário `Comercial`
+sem permissão `200`/`403`, `contratoId` inexistente `404`), o passo 3
+confirma explicitamente que os valores monetários voltam como **string** e
+batem exatamente com o que foi enviado (via `Number(...)` — testa a
+serialização do `Decimal` na prática, não só por leitura de código). Limpa
+tudo no final, sucesso ou falha.
+
+```bash
+docker compose exec api npm run smoke:fase3-financeiro
+```
+
+Com a Fase 3 completa, os 5 smoke tests (`fase2`, `fase3-producao`,
+`fase3-ambiental`, `fase3-logistica`, `fase3-financeiro`) devem ser
+reconfirmados juntos sempre que houver mudança de schema ou nos módulos
+compartilhados (`middleware/`, `lib/`, `scripts/smoke-test-helpers.ts`,
+`scripts/smoke-test-fixtures.ts`):
+
+```bash
+docker compose exec api npm run smoke:fase2 && \
+docker compose exec api npm run smoke:fase3-producao && \
+docker compose exec api npm run smoke:fase3-ambiental && \
+docker compose exec api npm run smoke:fase3-logistica && \
+docker compose exec api npm run smoke:fase3-financeiro
+```
+
 ## Estrutura
 
 ```
@@ -538,10 +640,12 @@ apps/api/
     middleware/   # auth, tenant-scoping, roles
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
                    # representantes, status-contrato, contratos, detalhes-producao,
-                   # detalhes-ambiental, detalhes-logistica; financeiro ainda não existe)
+                   # detalhes-ambiental, detalhes-logistica, detalhes-financeiro —
+                   # Fase 3 completa; Fase 4 (auditoria/histórico) ainda não existe)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
   scripts/        # smoke tests por fase (smoke-test-fase2.ts, smoke-test-fase3-producao.ts,
-                   # smoke-test-fase3-ambiental.ts, smoke-test-fase3-logistica.ts, ...)
+                   # smoke-test-fase3-ambiental.ts, smoke-test-fase3-logistica.ts,
+                   # smoke-test-fase3-financeiro.ts)
 apps/web/              # React + Vite
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```

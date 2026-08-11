@@ -23,9 +23,11 @@ const contratoFields = {
   certificacaoProcessoOrigem: { type: "boolean" },
   requerCites: { type: "boolean" },
   requerFsc: { type: "boolean" },
-  comissaoPct: { type: "number" },
-  comissaoMetragem: { type: "number" },
-  valorTotalUsd: { type: "number" },
+  // Decimal no banco (ver schema.prisma) — mesma decisão de precisão
+  // monetária da Fase 3/Financeiro, aplicada aqui de forma consistente.
+  comissaoPct: { type: "number", minimum: 0 },
+  comissaoMetragem: { type: "number", minimum: 0 },
+  valorTotalUsd: { type: "number", minimum: 0 },
   moedaValorTotal: { type: "string", minLength: 1 },
   modalidadePgtContaBrasil: { type: "string", minLength: 1 },
   modalidadePgtContaExterior: { type: "string", minLength: 1 },
@@ -105,7 +107,18 @@ type ContratoCreateBody = ContratoFields;
 /** PATCH — todo campo é opcional (atualização parcial). */
 type ContratoPatchBody = Partial<ContratoFields>;
 
-/** Registrada dentro do contexto protegido (plugins/protected-context.ts). */
+/**
+ * Serialização de Decimal: comissaoPct/comissaoMetragem/valorTotalUsd são
+ * `Prisma.Decimal` (não `number`) em runtime. Não convertemos isso pra
+ * Number em nenhum handler abaixo — de propósito. `Prisma.Decimal`
+ * implementa `toJSON()` retornando string, e como nenhuma rota aqui declara
+ * `schema.response`, o Fastify serializa a resposta com `JSON.stringify()`
+ * puro (respeita `toJSON()`), então esses campos chegam no JSON da API como
+ * string (ex.: `"valorTotalUsd":"12345.68"`, já arredondado pra escala da
+ * coluna). É a mesma decisão usada em detalhes-financeiro.routes.ts — string
+ * evita reintroduzir erro de arredondamento de float bem na resposta da API.
+ * Cliente HTTP deve tratar esses campos como string, não number.
+ */
 export async function contratosRoutes(app: FastifyInstance) {
   app.get("/contratos", { schema: { querystring: listQuerySchema } }, async (request) => {
     const query = request.query as { page?: string; pageSize?: string; statusId?: string; importadorId?: string };
