@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { runtimePrisma } from "../lib/prisma.js";
+import { auditLoggerExtension, type ActiveClientBox } from "./audit-logger.js";
 
 /** Models de negócio que carregam organizacaoId diretamente (ver schema.prisma). */
 const TENANT_SCOPED_MODELS = new Set([
@@ -36,6 +37,11 @@ const UNSAFE_UNIQUE_OPERATIONS = new Set([
  * query de um model tenant-scoped — essa é a "segunda linha" central citada
  * na seção 3 do ARCHITECTURE.md: nenhuma rota escreve `where: { organizacaoId }`
  * manualmente, é sempre este client (request.db) que faz isso.
+ *
+ * `auditLoggerExtension` (Fase 4) é composto por cima disso em
+ * `attachTenantScope`, não aqui — precisa da caixa (`ActiveClientBox`) que só
+ * existe depois que a transação abre; ver comentário lá embaixo e em
+ * audit-logger.ts.
  */
 export function scopedPrisma(organizacaoId: string) {
   return runtimePrisma.$extends({
@@ -99,11 +105,22 @@ export function scopedPrisma(organizacaoId: string) {
  * dentro de UMA ÚNICA transação Prisma que primeiro roda
  * `SELECT set_config('app.current_organizacao_id', $1, true)` antes de
  * qualquer outra query. Como o Fastify processa a request em hooks
- * desacoplados (preHandler → route handler → onResponse), não dá pra usar
+ * desacoplados (preHandler → route handler → onSend), não dá pra usar
  * `prisma.$transaction(async (tx) => { ... })` da forma direta (o corpo da
  * rota não roda aqui) — em vez disso a transação fica "segurada aberta" por
- * uma Promise que só resolve no hook `onResponse` (releaseTenantScope,
+ * uma Promise que só resolve no hook `onSend` (releaseTenantScope,
  * registrado junto com este middleware em plugins/protected-context.ts).
+ *
+ * `onSend`, não `onResponse`: `onSend` roda ANTES da resposta ser
+ * efetivamente enviada ao cliente e pode atrasar o envio — é o que garante
+ * que o COMMIT já aconteceu de verdade antes do cliente receber a resposta.
+ * `onResponse` rodaria só DEPOIS da resposta já ter saído (achado real
+ * durante o smoke test da Fase 4: um teste que lia o banco direto, por uma
+ * conexão separada, logo após receber a resposta HTTP de um PATCH, às vezes
+ * não via a escrita ainda — a transação por trás do request.db podia
+ * commitar DEPOIS do cliente já ter recebido "200 OK"). Isso tem um custo
+ * pequeno (a resposta espera o commit), mas é o comportamento correto: uma
+ * API não deveria responder sucesso antes do dado estar de fato durável.
  */
 export async function attachTenantScope(request: FastifyRequest, reply: FastifyReply) {
   if (!request.user) {
@@ -112,7 +129,12 @@ export async function attachTenantScope(request: FastifyRequest, reply: FastifyR
   }
 
   const organizacaoId = request.user.organizacaoId;
-  const client = scopedPrisma(organizacaoId);
+  const usuarioId = request.user.id;
+
+  // Preenchida só depois que `tx` existir (dentro do $transaction abaixo) —
+  // ver ActiveClientBox em audit-logger.ts pro motivo dessa indireção.
+  const activeClientBox: ActiveClientBox = {};
+  const client = scopedPrisma(organizacaoId).$extends(auditLoggerExtension(usuarioId, activeClientBox));
 
   let release!: () => void;
   const released = new Promise<void>((resolve) => {
@@ -133,6 +155,7 @@ export async function attachTenantScope(request: FastifyRequest, reply: FastifyR
         // (equivalente a SET LOCAL) — evita vazamento do valor entre
         // requisições diferentes que reusem a mesma conexão do pool.
         await tx.$executeRaw`SELECT set_config('app.current_organizacao_id', ${organizacaoId}, true)`;
+        activeClientBox.current = tx;
         provideClient(tx as unknown as ReturnType<typeof scopedPrisma>);
         // Mantém a transação aberta até a requisição terminar de verdade.
         await released;
@@ -154,16 +177,20 @@ export async function attachTenantScope(request: FastifyRequest, reply: FastifyR
 }
 
 /**
- * Libera a transação aberta por `attachTenantScope`, permitindo que ela
- * commite. Registrado como hook `onResponse` — roda depois da resposta já
- * ter sido enviada, então não atrasa a request, mas garante que a conexão
- * seja devolvida ao pool antes do ciclo da requisição terminar de verdade.
+ * Libera a transação aberta por `attachTenantScope` e ESPERA ela commitar de
+ * verdade antes de deixar a resposta sair. Registrado como hook `onSend`
+ * (não `onResponse` — ver comentário grande em `attachTenantScope` sobre a
+ * condição de corrida que isso evita).
  */
-export async function releaseTenantScope(request: FastifyRequest) {
+export async function releaseTenantScope(
+  request: FastifyRequest,
+  _reply: FastifyReply,
+  payload: unknown,
+): Promise<unknown> {
   const tx = request.tenantTx;
   if (!tx) {
     // Request nunca chegou a abrir transação (ex.: 401 antes de attachTenantScope terminar).
-    return;
+    return payload;
   }
 
   tx.release();
@@ -173,4 +200,6 @@ export async function releaseTenantScope(request: FastifyRequest) {
   } catch (err) {
     request.log.error({ err }, "[tenant-scoping] falha ao commitar transação da requisição");
   }
+
+  return payload;
 }

@@ -61,7 +61,12 @@ const patchBodySchema = {
   type: "object",
   additionalProperties: false,
   minProperties: 1,
-  properties: contratoFields,
+  properties: {
+    ...contratoFields,
+    // Não é campo de "contratos" — é anotação pro registro de
+    // historico_status_contrato quando o PATCH muda o statusId (ver handler).
+    observacao: { type: "string", minLength: 1 },
+  },
 } as const;
 
 const listQuerySchema = {
@@ -104,8 +109,11 @@ interface ContratoFields {
 
 /** POST — schema JSON já garante os campos obrigatórios de ContratoFields presentes. */
 type ContratoCreateBody = ContratoFields;
-/** PATCH — todo campo é opcional (atualização parcial). */
-type ContratoPatchBody = Partial<ContratoFields>;
+/**
+ * PATCH — todo campo de contrato é opcional (atualização parcial), mais
+ * `observacao`, que não é campo de "contratos" (ver patchBodySchema).
+ */
+type ContratoPatchBody = Partial<ContratoFields> & { observacao?: string };
 
 /**
  * Serialização de Decimal: comissaoPct/comissaoMetragem/valorTotalUsd são
@@ -186,7 +194,9 @@ export async function contratosRoutes(app: FastifyInstance) {
     { preHandler: WRITE_ROLES, schema: { body: patchBodySchema } },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const body = request.body as ContratoPatchBody;
+      // observacao é só do historico_status_contrato, nunca vai pro
+      // updateMany de "contratos" — separado do resto do body aqui.
+      const { observacao, ...body } = request.body as ContratoPatchBody;
 
       const existing = await request.db.contrato.findFirst({ where: { id } });
       if (!existing) return reply.code(404).send({ message: "Contrato não encontrado." });
@@ -214,6 +224,22 @@ export async function contratosRoutes(app: FastifyInstance) {
           return reply.code(409).send({ message: "Já existe um contrato com esse número nesta organização." });
         }
         throw err;
+      }
+
+      // Trilha de mudança de status (separada da auditoria genérica por
+      // campo, que já cobre "statusId" como qualquer outro campo — ver
+      // middleware/audit-logger.ts). Aqui é o histórico de negócio, com
+      // observação opcional do usuário.
+      if (body.statusId !== undefined && body.statusId !== existing.statusId) {
+        await request.db.historicoStatusContrato.create({
+          data: {
+            contratoId: id,
+            statusAnteriorId: existing.statusId,
+            statusNovoId: body.statusId,
+            alteradoPorId: request.user!.id,
+            observacao: observacao ?? null,
+          },
+        });
       }
 
       return request.db.contrato.findFirst({ where: { id }, include: RELATION_INCLUDE });

@@ -13,6 +13,8 @@ import { detalhesProducaoRoutes } from "../modules/detalhes-producao/detalhes-pr
 import { detalhesAmbientalRoutes } from "../modules/detalhes-ambiental/detalhes-ambiental.routes.js";
 import { detalhesLogisticaRoutes } from "../modules/detalhes-logistica/detalhes-logistica.routes.js";
 import { detalhesFinanceiroRoutes } from "../modules/detalhes-financeiro/detalhes-financeiro.routes.js";
+import { historicoStatusContratoRoutes } from "../modules/historico-status-contrato/historico-status-contrato.routes.js";
+import { auditoriaContratosRoutes } from "../modules/auditoria-contratos/auditoria-contratos.routes.js";
 
 /**
  * Contexto protegido: autenticação + tenant-scoping registrados uma única
@@ -24,7 +26,10 @@ import { detalhesFinanceiroRoutes } from "../modules/detalhes-financeiro/detalhe
 export async function protectedContext(app: FastifyInstance) {
   app.addHook("preHandler", authenticate);
   app.addHook("preHandler", attachTenantScope);
-  app.addHook("onResponse", releaseTenantScope);
+  // onSend (não onResponse) — precisa commitar ANTES da resposta sair pro
+  // cliente, senão um GET/consulta feita logo em seguida pode não ver a
+  // escrita ainda. Ver comentário grande em middleware/tenant-scoping.ts.
+  app.addHook("onSend", releaseTenantScope);
 
   await app.register(meRoutes);
   await app.register(logoutRoutes);
@@ -42,4 +47,9 @@ export async function protectedContext(app: FastifyInstance) {
   await app.register(detalhesAmbientalRoutes);
   await app.register(detalhesLogisticaRoutes);
   await app.register(detalhesFinanceiroRoutes);
+
+  // Fase 4 — histórico de status + auditoria (leitura; escrita é automática
+  // via PATCH /contratos/:id e via middleware/audit-logger.ts).
+  await app.register(historicoStatusContratoRoutes);
+  await app.register(auditoriaContratosRoutes);
 }
