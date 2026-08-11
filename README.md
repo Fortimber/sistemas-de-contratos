@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 1 — Autenticação** (ver seção 7).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 2 — CRUD core** (ver seção 7).
 
 ## Rodando localmente (Docker)
 
@@ -230,14 +230,117 @@ EOF
 `org e usuario de teste removidos`. Depois disso o banco volta a ter só a
 sua organização real e o usuário admin do seed.
 
+## Tabelas de referência e contratos (Fase 2)
+
+Todas as rotas abaixo são protegidas (precisam do header
+`Authorization: Bearer <accessToken>`, igual `/auth/me`) e já respondem só
+com dado da organização do usuário logado — filtro de aplicação (Fase 1) +
+RLS do Postgres (Fase 1, seção "Testando RLS" acima). Não é preciso passar
+`organizacaoId` em nenhum body: quem preenche é o servidor.
+
+**Permissões:** leitura (`GET`) é liberada pra qualquer perfil autenticado.
+Escrita (`POST`/`PATCH`/`DELETE`) é restrita aos perfis `Administrador` e
+`Comercial` — os demais (`Operacional`, `Financeiro`, `Ambiental`) recebem
+`403` ao tentar escrever. A escrita específica de cada setor
+(`detalhes_producao`/`ambiental`/`logistica`/`financeiro`) é Fase 3, ainda
+não existe.
+
+### Tabelas de referência
+
+Mesmo shape de rotas pra `especies`, `produtos`, `importadores`,
+`representantes` e `status-contrato` (o path usa hífen, a tabela no banco é
+`status_contrato`):
+
+```bash
+GET    /especies              # lista paginada — ?page=1&pageSize=20
+GET    /especies/:id
+POST   /especies               # { "nomeEspecie": "..." }
+PATCH  /especies/:id           # body parcial — qualquer subconjunto dos campos
+DELETE /especies/:id
+```
+
+O mesmo padrão vale pra:
+
+- `/produtos` — body `{ nomeProduto, especieId }`. `especieId` precisa
+  existir e ser da sua organização (senão `400`, não `500`).
+- `/importadores` — body `{ nomeRazaoSocial, pais, email }`.
+- `/representantes` — body `{ nomeRepresentante, email }`.
+- `/status-contrato` — body `{ nomeStatus, setorResponsavel, ordem }`, onde
+  `setorResponsavel` é um de `Comercial | Produção | Ambiental | Financeiro
+  | Logística`.
+
+`especies` e `status-contrato` têm nome único por organização — criar ou
+editar pra um nome já usado responde `409`, não erro bruto do Postgres.
+
+`DELETE` em qualquer uma dessas responde `409` com mensagem clara se o
+registro ainda estiver referenciado por algum contrato (ex.: apagar uma
+espécie que tem produto cadastrado, ou um importador com contrato ativo) —
+em vez de deixar vazar a violação de foreign key do Postgres.
+
+### Contratos
+
+```bash
+GET  /contratos                          # paginado
+GET  /contratos?statusId=<id>            # filtro por status
+GET  /contratos?importadorId=<id>        # filtro por importador (combináveis)
+GET  /contratos/:id                      # inclui importador/representante/produto/status populados
+POST /contratos
+PATCH /contratos/:id
+```
+
+Body de `POST /contratos` (todos os campos abaixo são obrigatórios, exceto
+os opcionais indicados):
+
+```json
+{
+  "numeroContrato": "CT-2026-001",
+  "importadorId": "...",
+  "representanteId": "...",
+  "produtoId": "...",
+  "statusId": "...",
+  "contratoPaiId": "...",             // opcional — usar em aditivos
+  "tipoContrato": "Original",         // "Original" | "Aditivo"
+  "dataContrato": "2026-01-15",
+  "volumeM3": 120.5,
+  "qtdContainers": 5,
+  "local": "Belém",
+  "tipoFrete": "FOB",                 // "FOB" | "CFR" | "CIF"
+  "requerFumigacao": false,           // opcional, default false
+  "certificacaoProcessoOrigem": false,// opcional, default false
+  "requerCites": false,               // opcional, default false
+  "requerFsc": false,                 // opcional, default false
+  "comissaoPct": 2.5,                 // opcional
+  "comissaoMetragem": 10,             // opcional
+  "valorTotalUsd": 45000,
+  "moedaValorTotal": "USD",
+  "modalidadePgtContaBrasil": "À vista",
+  "modalidadePgtContaExterior": "À vista"
+}
+```
+
+- `importadorId`, `representanteId`, `produtoId`, `statusId` e
+  `contratoPaiId` (se enviado) são validados **antes** do insert — cada um
+  precisa existir e pertencer à sua organização, senão a resposta é `400`
+  identificando o campo problemático (`{ "message": "O campo \"produtoId\"
+  não existe ou não pertence à sua organização." }`), nunca um `500` cru.
+- `numeroContrato` é único por organização — duplicar responde `409`.
+- `criadoPorId` é preenchido automaticamente com o usuário autenticado; não
+  precisa (e não é aceito) no body.
+- `PATCH /contratos/:id` aceita qualquer subconjunto dos mesmos campos
+  (atualização parcial) e preenche `atualizadoPorId` automaticamente. Se
+  `statusId` mudar, por enquanto só grava o valor novo em `contratos` — sem
+  gerar histórico ainda (isso é Fase 4, tabela `historico_status_contrato`).
+- Não existe `DELETE /contratos/:id` nesta fase.
+
 ## Estrutura
 
 ```
 apps/api/
   src/
-    lib/          # prisma client, jwt sign/verify
+    lib/          # prisma client, jwt sign/verify, paginação, tradução de erros do Prisma
     middleware/   # auth, tenant-scoping, roles
-    modules/      # um módulo por entidade (auth, ... contratos na Fase 2+)
+    modules/      # um módulo por entidade (auth, especies, produtos, importadores,
+                   # representantes, status-contrato, contratos; setoriais na Fase 3+)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
 apps/web/              # React + Vite
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
