@@ -74,24 +74,38 @@ async function parseBody(res: Response): Promise<unknown> {
   return text ? JSON.parse(text) : null;
 }
 
-// Evita disparar um /auth/refresh por requisição em paralelo quando várias
-// chamadas tomam 401 ao mesmo tempo (ex.: várias queries do TanStack Query
-// disparadas juntas) — todas esperam a MESMA promise de refresh, só uma
-// chamada de rede acontece.
-let refreshInFlight: Promise<boolean> | null = null;
+interface RefreshResponse {
+  accessToken: string;
+  usuario: unknown;
+}
 
-function refreshAccessToken(): Promise<boolean> {
+// Evita disparar um /auth/refresh por requisição em paralelo — não só entre
+// requisições de API que tomam 401 ao mesmo tempo, mas também entre
+// chamadores diretos (ver `refreshSession`, usado por AuthProvider no boot
+// da aplicação). Isso é crítico, não só uma otimização: a API ROTACIONA o
+// refresh token a cada uso (revoga o antigo, emite um novo) e trata reuso
+// de um token já revogado como sinal de roubo — derrubando TODAS as
+// sessões do usuário (ver apps/api/src/modules/auth/auth.service.ts).
+// Duas chamadas concorrentes de /auth/refresh com a MESMA cookie antiga
+// (achado real: React StrictMode invoca o efeito de boot duas vezes em
+// dev) fariam a segunda ler o token que a primeira acabou de revogar,
+// derrubando a sessão nova que a primeira tinha acabado de criar. Por
+// isso todo mundo — retry automático em 401 e a checagem de boot — precisa
+// convergir nesta MESMA promise em voo, nunca disparar `fetch` direto.
+let refreshInFlight: Promise<RefreshResponse | null> | null = null;
+
+export function refreshSession(): Promise<RefreshResponse | null> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
         const res = await fetch(`${API_URL}/auth/refresh`, { method: "POST", credentials: "include" });
-        if (!res.ok) return false;
-        const json = (await parseBody(res)) as { accessToken?: string } | null;
-        if (!json?.accessToken) return false;
+        if (!res.ok) return null;
+        const json = (await parseBody(res)) as RefreshResponse | null;
+        if (!json?.accessToken) return null;
         setAccessToken(json.accessToken);
-        return true;
+        return json;
       } catch {
-        return false;
+        return null;
       }
     })().finally(() => {
       refreshInFlight = null;
@@ -117,7 +131,7 @@ export async function apiRequest<T = unknown>(path: string, options: RequestOpti
   let res = await rawFetch(path, options, getAccessToken());
 
   if (res.status === 401 && !isAuthEndpoint) {
-    const refreshed = await refreshAccessToken();
+    const refreshed = await refreshSession();
     if (!refreshed) {
       setAccessToken(null);
       redirectToLogin();

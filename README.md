@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica — Tailwind, shadcn/ui, roteamento, cliente HTTP) pronta, ver seção "Frontend" abaixo. Próxima: Fase 1 do frontend (login + primeiras telas de negócio).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica) e Fase 1 (login + proteção de rotas) prontas, ver seção "Frontend" abaixo. Próxima: Fase 2 do frontend (primeiras telas de negócio).
 
 ## Rodando localmente (Docker)
 
@@ -672,10 +672,9 @@ docker compose exec api npm run smoke:fase3-financeiro && \
 docker compose exec api npm run smoke:fase4
 ```
 
-## Frontend (Fase 0 — fundação)
+## Frontend (Fase 0 — fundação; Fase 1 — login)
 
-Só a fundação técnica por enquanto — sem login nem telas de negócio ainda
-(isso é a Fase 1 do frontend). O que existe:
+### Fase 0 — fundação técnica
 
 - **Stack**: React + Vite, Tailwind v4 (`@tailwindcss/vite`, sem
   `tailwind.config.js` — configuração vive em `src/index.css`), shadcn/ui
@@ -686,27 +685,25 @@ Só a fundação técnica por enquanto — sem login nem telas de negócio ainda
   foi escrito à mão — o preset `radix-nova` do shadcn CLI não inclui esse
   componente (`npx shadcn add form` roda sem erro mas não gera arquivo
   nenhum); o resto veio direto do CLI (`npx shadcn add <componente>`).
+  `input.tsx` também foi ajustado na Fase 1 — ver "achado real" abaixo.
 - **`src/lib/api-client.ts`**: cliente HTTP central. Sempre manda
   `credentials: "include"` (obrigatório pro navegador aceitar a cookie
   httpOnly do refresh token — Fase 1 da API); guarda o `accessToken` só em
   memória (variável de módulo, nunca `localStorage`/`sessionStorage`); numa
   resposta `401` (fora de `/auth/login` e `/auth/refresh`), tenta **um**
-  `POST /auth/refresh` e repete a chamada original — se o refresh também
-  falhar, derruba o token e redireciona pra `/login` (rota que só existe a
-  partir da Fase 1 do frontend). Aponta pra API via `VITE_API_URL`.
+  `POST /auth/refresh` (via `refreshSession`, deduplicado — ver Fase 1
+  abaixo) e repete a chamada original — se o refresh também falhar, derruba
+  o token e redireciona pra `/login`. Aponta pra API via `VITE_API_URL`.
 - **Roteamento**: `src/App.tsx` define as rotas; `src/components/layout/`
   tem o layout base (`AppLayout` = sidebar + área de conteúdo via
-  `<Outlet />`). Rota `/` é só um placeholder (`src/pages/home-page.tsx`)
-  pra confirmar que roteamento + Tailwind + shadcn/ui estão funcionando.
+  `<Outlet />`).
 - **`apps/web/.env.example`**: `VITE_API_URL` para rodar o frontend fora do
   Docker Compose (dentro do Compose, a variável já vem do `.env` da raiz —
   ver serviço `web` em `docker-compose.yml`).
 
 ```bash
 docker compose up -d web
-# http://localhost:5173 — deve renderizar o card "Fase 0 — fundação do
-# frontend" com borda/sombra/tipografia do shadcn/ui aplicadas, sidebar à
-# esquerda, sem erro nenhum no console do navegador.
+# http://localhost:5173 — sem estar logado, redireciona pra /login (ver Fase 1).
 ```
 
 > **Nota (Windows + Docker Desktop):** ao contrário do `tsx watch` da API
@@ -716,6 +713,66 @@ docker compose up -d web
 > mesmo problema de propagação de evento entre o bind mount do Windows e o
 > container — confirmado na prática durante a Fase 0. Não deveria precisar
 > reiniciar o container pra ver uma mudança.
+
+### Fase 1 — login e proteção de rotas
+
+- **`src/pages/login-page.tsx`**: formulário (React Hook Form + Zod,
+  schema espelhando exatamente o body de `POST /auth/login` na API —
+  `login`/`senha` obrigatórios e não-vazios). Em `401`, mostra sempre a
+  mesma mensagem genérica ("Login ou senha inválidos.") — nunca diferencia
+  se foi o login ou a senha que errou, mesma escolha de segurança que a
+  própria API já faz (`auth.service.ts`). Botão de submit desabilita via
+  `form.formState.isSubmitting` (RHF), evitando duplo submit.
+- **`src/lib/auth-context.tsx`** (`AuthProvider`/`useAuth`): dono do estado
+  de sessão da aplicação. Como o `accessToken` só existe em memória (Fase
+  0), ele some a cada F5 — ao montar, tenta automaticamente **um**
+  `POST /auth/refresh` (usa a cookie httpOnly, que sobrevive ao F5) antes
+  de decidir "logado" ou "não logado". Enquanto isso não resolve,
+  `status` fica `"loading"` e as rotas mostram um carregamento simples
+  (`src/components/full-page-loading.tsx`) em vez de piscar a tela de
+  login.
+- **`src/routes/route-guards.tsx`**: `ProtectedRoute` (sem sessão → manda
+  pra `/login`) e `PublicOnlyRoute` (com sessão → `/login` manda de volta
+  pra `/`), ambas respeitando o estado `"loading"` acima.
+- **Logout**: botão na sidebar (`src/components/layout/sidebar.tsx`),
+  chama `POST /auth/logout`, limpa o estado em memória e manda pra
+  `/login`.
+- **Pendente de propósito**: tela de troca de senha obrigatória
+  (`usuario.deveTrocarSenha` já vem da API, mas ainda não tem UI).
+
+**Achado real, corrigido durante a verificação manual** — duas coisas que
+só apareceram testando de ponta a ponta num navegador de verdade, não lendo
+o código:
+
+1. **`Function components cannot be given refs`** no console: o
+   `Input` gerado pelo preset `radix-nova` do shadcn CLI é um function
+   component simples, sem `React.forwardRef` — o preset assume o modelo de
+   ref-como-prop do React 19, mas o projeto está no React 18, e
+   `FormControl` (form.tsx) usa `Slot.Root` pra repassar a ref do
+   react-hook-form pro input. Corrigido envolvendo `Input` em
+   `React.forwardRef` (`src/components/ui/input.tsx`).
+2. **F5 derrubava a sessão em vez de mantê-la**: o efeito de boot do
+   `AuthProvider` chamava `POST /auth/refresh` direto. Em desenvolvimento,
+   o `StrictMode` do React invoca esse efeito **duas vezes** seguidas —
+   duas chamadas de `/auth/refresh` concorrentes, com a MESMA cookie
+   antiga. Como a API rotaciona o refresh token a cada uso (revoga o
+   antigo, emite um novo) e trata reuso de um token já revogado como sinal
+   de roubo — derrubando **todas** as sessões do usuário —, a segunda
+   chamada matava a sessão que a primeira tinha acabado de criar, e o F5
+   sempre voltava pra `/login`. Corrigido centralizando a chamada de
+   refresh numa única promise deduplicada (`refreshSession` em
+   `api-client.ts`), reusada tanto pelo boot quanto pelo retry automático
+   em `401` — nunca dois `fetch` de refresh concorrentes.
+
+**Verificado de ponta a ponta num navegador real (Chrome, via
+claude-in-chrome), não só por leitura de código**: acesso a `/` deslogado
+redireciona pra `/login`; senha errada mostra a mensagem genérica sem
+redirecionar; login correto redireciona pra `/` com sidebar/conteúdo
+protegido visível; F5 mantém a sessão (sem voltar pra `/login`); acessar
+`/login` diretamente enquanto logado redireciona pra `/`; logout limpa a
+cookie e redireciona pra `/login`; acessar `/` diretamente depois do
+logout volta pra `/login`. Console do navegador sem erros em nenhum desses
+passos (depois dos dois achados acima corrigidos).
 
 ## Estrutura
 
@@ -733,12 +790,15 @@ apps/api/
                    # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
                    # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
                    # smoke-test-fase4.ts)
-apps/web/          # React + Vite — fundação (Fase 0) pronta, ver seção "Frontend" acima
+apps/web/          # React + Vite — Fases 0 e 1 prontas, ver seção "Frontend" acima
   src/
     components/
-      layout/     # AppLayout, Sidebar
+      layout/     # AppLayout, Sidebar (logout)
       ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form)
-    lib/          # api-client (fetch central), query-client (TanStack Query), utils (cn)
-    pages/        # páginas roteadas (só home-page.tsx — placeholder — por enquanto)
+      full-page-loading.tsx # estado de carregamento (boot da sessão)
+    lib/          # api-client (fetch central + refreshSession deduplicado), auth-context
+                   # (AuthProvider/useAuth), query-client (TanStack Query), utils (cn)
+    pages/        # páginas roteadas (home-page.tsx — placeholder —, login-page.tsx)
+    routes/       # route-guards (ProtectedRoute, PublicOnlyRoute)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```
