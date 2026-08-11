@@ -13,9 +13,36 @@ docker compose up --build -d
 # aplica o schema (primeira vez / após mudar prisma/schema.prisma)
 docker compose exec api npx prisma migrate dev
 
+# define a senha do role de runtime da API (não fica em migration — migrations
+# são commitadas no git, senha não pode ir junto). Repita sempre que o valor
+# de APP_DB_PASSWORD no seu .env mudar, ou após um `prisma migrate reset`.
+docker compose exec postgres psql -U contratos -d sistema_contratos
+# dentro do psql, substituindo pelo valor de APP_DB_PASSWORD do seu .env:
+#   ALTER ROLE app_runtime PASSWORD 'valor-de-APP_DB_PASSWORD';
+#   \q
+
 # popula 1 organização + 1 usuário administrador
 docker compose exec api npx prisma db seed
 ```
+
+### Role de runtime da API (RLS — Fase 1)
+
+A API usa **dois** roles Postgres:
+
+- `contratos` (`DATABASE_URL`) — o superuser bootstrap do container (criado
+  pelo `POSTGRES_USER` da imagem oficial). Usado só para rodar migrations e,
+  em `auth.service.ts`, para localizar o usuário pelo `login` **antes** de
+  saber a organização (não existe contexto de tenant ainda nesse ponto).
+- `app_runtime` (`APP_DATABASE_URL`) — role restrito, sem `SUPERUSER`/
+  `BYPASSRLS`, criado pela migration `add_row_level_security`. É o role que
+  `request.db` de fato usa para servir dado de negócio.
+
+Essa separação existe porque superusers (e qualquer role com `BYPASSRLS`)
+**ignoram Row-Level Security incondicionalmente**, mesmo em tabelas com
+`FORCE ROW LEVEL SECURITY` — `FORCE` só afeta o dono da tabela, não
+superusers. Se a API servisse dado de negócio conectada como `contratos`, a
+RLS adicionada nessa migration seria inerte (ver comentários na própria
+migration e em `lib/prisma.ts`).
 
 - API: http://localhost:3000/health
 - Web: http://localhost:5173

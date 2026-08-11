@@ -1,7 +1,7 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { prisma } from "./lib/prisma.js";
+import { prisma, runtimePrisma } from "./lib/prisma.js";
 import { authRoutes } from "./modules/auth/auth.routes.js";
 import { protectedContext } from "./plugins/protected-context.js";
 
@@ -28,6 +28,7 @@ app.listen({ port, host: "0.0.0.0" }).catch((err) => {
 
 async function shutdown() {
   await prisma.$disconnect();
+  await runtimePrisma.$disconnect();
   await app.close();
   process.exit(0);
 }

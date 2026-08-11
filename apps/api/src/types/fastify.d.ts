@@ -10,5 +10,10 @@ declare module "fastify" {
       perfilAcesso: PerfilAcesso;
     };
     db: ReturnType<typeof scopedPrisma>;
+    /** Transação por-requisição que sustenta o GUC de RLS — ver middleware/tenant-scoping.ts. */
+    tenantTx?: {
+      release: () => void;
+      settled: Promise<void>;
+    };
   }
 }
