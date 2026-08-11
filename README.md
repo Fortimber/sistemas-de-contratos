@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais** (só Produção nesta rodada; ver seção 7).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais** (Produção e Ambiental validados; Logística e Financeiro ainda não — ver seção 7).
 
 ## Rodando localmente (Docker)
 
@@ -347,12 +347,12 @@ scoping, RLS ou nesses módulos:
 docker compose exec api npm run smoke:fase2
 ```
 
-## Módulos setoriais (Fase 3 — só Produção nesta rodada)
+## Módulos setoriais (Fase 3 — Produção e Ambiental)
 
 Cada setor (Produção, Ambiental, Logística, Financeiro) é uma extensão 1:1
 de `contratos` — uma linha por contrato, preenchida aos poucos pelo setor
-responsável. Ambiental/Logística/Financeiro ainda **não** existem; só
-Produção foi implementado e validado nesta rodada.
+responsável. Logística/Financeiro ainda **não** existem; cada setor é
+validado com seu próprio smoke test antes do próximo entrar.
 
 ### Produção (`detalhes_producao`)
 
@@ -404,6 +404,67 @@ inexistente (`404`). Limpa tudo no final, sucesso ou falha.
 docker compose exec api npm run smoke:fase3-producao
 ```
 
+### Ambiental (`detalhes_ambiental`)
+
+```bash
+GET /contratos/:contratoId/ambiental   # 404 se ainda não foi preenchido
+PUT /contratos/:contratoId/ambiental   # upsert — cria se não existe, atualiza se já existe
+```
+
+Body de `PUT` (todos os campos são opcionais — mesmo espírito de Produção):
+
+```json
+{
+  "autef": "AUTEF-2026-001",
+  "lpcoNumero": "LPCO-2026-001",
+  "lpcoStatus": "Protocolada",
+  "lpcoDataProtocolo": "2026-01-10",
+  "lpcoDataValidade": "2026-06-10",
+  "citesNumeroRequerimento": "...",
+  "citesNumero": "...",
+  "citesDataEntrada": "2026-01-15",
+  "citesDataValidade": "2026-07-15",
+  "citesStatus": "Não se aplica",
+  "gfNumero": "...",
+  "gfDataVencimento": "2026-05-01",
+  "gfDataRecebimentoSisflora": "2026-01-20",
+  "dofDataRegistro": "2026-01-25",
+  "statusAprovacaoCocCliente": "Pendente"
+}
+```
+
+- Mesma checagem de `contratoId` (existe e pertence à sua organização antes
+  do upsert — `404` claro, nunca `500`) e mesma defesa em profundidade via
+  RLS que Produção.
+- Três campos só aceitam um valor fixo de uma lista — qualquer outro valor
+  responde `400`:
+  - `lpcoStatus`: `Em análise | Protocolada | Deferida | Indeferida`
+  - `citesStatus`: `Não se aplica | Em análise | Deferida | Indeferida`
+  - `statusAprovacaoCocCliente`: `Pendente | Aprovado | Reprovado`
+- Se `lpcoDataProtocolo` **e** `lpcoDataValidade` forem enviados no mesmo
+  `PUT`, `lpcoDataValidade` não pode ser anterior a `lpcoDataProtocolo`
+  (`400` se for). Mesma regra para `citesDataEntrada`/`citesDataValidade`.
+  Enviar só um dos dois de cada par não dispara essa checagem.
+- **Permissões**: leitura (`GET`) liberada a qualquer perfil autenticado.
+  Escrita (`PUT`) restrita a `Administrador` e `Ambiental` — usa o perfil
+  dedicado do enum `PerfilAcesso` (diferente de Produção, que precisou se
+  aproximar de `Operacional` por não existir um perfil "Produção" isolado).
+
+### Smoke test automatizado (Fase 3 — Ambiental)
+
+`apps/api/scripts/smoke-test-fase3-ambiental.ts` reaproveita os mesmos
+helpers/fixtures da rodada de Produção. Cobre: `GET` antes de existir
+(`404`), `PUT` criando com os 3 campos de status válidos, `GET` depois,
+`PUT` atualizando (mesmo registro, não duplica), `lpcoStatus` fora da lista
+permitida (`400`), `citesDataValidade` anterior a `citesDataEntrada`
+(`400`), usuário `Financeiro` sem permissão de escrita (`GET` `200` / `PUT`
+`403`), e `PUT` num `contratoId` inexistente (`404`). Limpa tudo no final,
+sucesso ou falha.
+
+```bash
+docker compose exec api npm run smoke:fase3-ambiental
+```
+
 ## Estrutura
 
 ```
@@ -412,10 +473,11 @@ apps/api/
     lib/          # prisma client, jwt sign/verify, paginação, tradução de erros do Prisma
     middleware/   # auth, tenant-scoping, roles
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
-                   # representantes, status-contrato, contratos, detalhes-producao;
-                   # ambiental/logistica/financeiro ainda não existem)
+                   # representantes, status-contrato, contratos, detalhes-producao,
+                   # detalhes-ambiental; logistica/financeiro ainda não existem)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
-  scripts/        # smoke tests por fase (smoke-test-fase2.ts, smoke-test-fase3-producao.ts, ...)
+  scripts/        # smoke tests por fase (smoke-test-fase2.ts, smoke-test-fase3-producao.ts,
+                   # smoke-test-fase3-ambiental.ts, ...)
 apps/web/              # React + Vite
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```

@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "smoke:fase2": "tsx scripts/smoke-test-fase2.ts",
-    "smoke:fase3-producao": "tsx scripts/smoke-test-fase3-producao.ts"
+    "smoke:fase3-producao": "tsx scripts/smoke-test-fase3-producao.ts",
+    "smoke:fase3-ambiental": "tsx scripts/smoke-test-fase3-ambiental.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
