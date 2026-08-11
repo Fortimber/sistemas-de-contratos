@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais completa** (Produção, Ambiental, Logística e Financeiro; ver seção 7). Próxima: Fase 4 (auditoria/histórico).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica — Tailwind, shadcn/ui, roteamento, cliente HTTP) pronta, ver seção "Frontend" abaixo. Próxima: Fase 1 do frontend (login + primeiras telas de negócio).
 
 ## Rodando localmente (Docker)
 
@@ -672,21 +672,73 @@ docker compose exec api npm run smoke:fase3-financeiro && \
 docker compose exec api npm run smoke:fase4
 ```
 
+## Frontend (Fase 0 — fundação)
+
+Só a fundação técnica por enquanto — sem login nem telas de negócio ainda
+(isso é a Fase 1 do frontend). O que existe:
+
+- **Stack**: React + Vite, Tailwind v4 (`@tailwindcss/vite`, sem
+  `tailwind.config.js` — configuração vive em `src/index.css`), shadcn/ui
+  (estilo `radix-nova`, sobre o pacote unificado `radix-ui`), React Router,
+  TanStack Query, React Hook Form + Zod.
+- **Componentes base já instalados** (`src/components/ui/`): `button`,
+  `input`, `label`, `card`, `table`, `select`, `dialog`, `form`. `form.tsx`
+  foi escrito à mão — o preset `radix-nova` do shadcn CLI não inclui esse
+  componente (`npx shadcn add form` roda sem erro mas não gera arquivo
+  nenhum); o resto veio direto do CLI (`npx shadcn add <componente>`).
+- **`src/lib/api-client.ts`**: cliente HTTP central. Sempre manda
+  `credentials: "include"` (obrigatório pro navegador aceitar a cookie
+  httpOnly do refresh token — Fase 1 da API); guarda o `accessToken` só em
+  memória (variável de módulo, nunca `localStorage`/`sessionStorage`); numa
+  resposta `401` (fora de `/auth/login` e `/auth/refresh`), tenta **um**
+  `POST /auth/refresh` e repete a chamada original — se o refresh também
+  falhar, derruba o token e redireciona pra `/login` (rota que só existe a
+  partir da Fase 1 do frontend). Aponta pra API via `VITE_API_URL`.
+- **Roteamento**: `src/App.tsx` define as rotas; `src/components/layout/`
+  tem o layout base (`AppLayout` = sidebar + área de conteúdo via
+  `<Outlet />`). Rota `/` é só um placeholder (`src/pages/home-page.tsx`)
+  pra confirmar que roteamento + Tailwind + shadcn/ui estão funcionando.
+- **`apps/web/.env.example`**: `VITE_API_URL` para rodar o frontend fora do
+  Docker Compose (dentro do Compose, a variável já vem do `.env` da raiz —
+  ver serviço `web` em `docker-compose.yml`).
+
+```bash
+docker compose up -d web
+# http://localhost:5173 — deve renderizar o card "Fase 0 — fundação do
+# frontend" com borda/sombra/tipografia do shadcn/ui aplicadas, sidebar à
+# esquerda, sem erro nenhum no console do navegador.
+```
+
+> **Nota (Windows + Docker Desktop):** ao contrário do `tsx watch` da API
+> (que às vezes precisa de `docker compose restart api` pra perceber
+> mudança de arquivo — ver nota acima), o Vite do frontend já roda com
+> `server.watch.usePolling: true` (`apps/web/vite.config.ts`) por causa do
+> mesmo problema de propagação de evento entre o bind mount do Windows e o
+> container — confirmado na prática durante a Fase 0. Não deveria precisar
+> reiniciar o container pra ver uma mudança.
+
 ## Estrutura
 
 ```
 apps/api/
   src/
     lib/          # prisma client, jwt sign/verify, paginação, tradução de erros do Prisma
-    middleware/   # auth, tenant-scoping, roles
+    middleware/   # auth, tenant-scoping, roles, audit-logger
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
                    # representantes, status-contrato, contratos, detalhes-producao,
-                   # detalhes-ambiental, detalhes-logistica, detalhes-financeiro —
-                   # Fase 3 completa; Fase 4 (auditoria/histórico) ainda não existe)
+                   # detalhes-ambiental, detalhes-logistica, detalhes-financeiro,
+                   # historico-status-contrato, auditoria-contratos — Fases 1-4 completas)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
-  scripts/        # smoke tests por fase (smoke-test-fase2.ts, smoke-test-fase3-producao.ts,
-                   # smoke-test-fase3-ambiental.ts, smoke-test-fase3-logistica.ts,
-                   # smoke-test-fase3-financeiro.ts)
-apps/web/              # React + Vite
+  scripts/        # smoke tests por fase (smoke-test-fase1-cookie-auth.ts, smoke-test-fase2.ts,
+                   # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
+                   # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
+                   # smoke-test-fase4.ts)
+apps/web/          # React + Vite — fundação (Fase 0) pronta, ver seção "Frontend" acima
+  src/
+    components/
+      layout/     # AppLayout, Sidebar
+      ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form)
+    lib/          # api-client (fetch central), query-client (TanStack Query), utils (cn)
+    pages/        # páginas roteadas (só home-page.tsx — placeholder — por enquanto)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```
