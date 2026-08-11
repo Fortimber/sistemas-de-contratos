@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 2 — CRUD core** (ver seção 7).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais** (só Produção nesta rodada; ver seção 7).
 
 ## Rodando localmente (Docker)
 
@@ -347,6 +347,63 @@ scoping, RLS ou nesses módulos:
 docker compose exec api npm run smoke:fase2
 ```
 
+## Módulos setoriais (Fase 3 — só Produção nesta rodada)
+
+Cada setor (Produção, Ambiental, Logística, Financeiro) é uma extensão 1:1
+de `contratos` — uma linha por contrato, preenchida aos poucos pelo setor
+responsável. Ambiental/Logística/Financeiro ainda **não** existem; só
+Produção foi implementado e validado nesta rodada.
+
+### Produção (`detalhes_producao`)
+
+```bash
+GET /contratos/:contratoId/producao   # 404 se ainda não foi preenchido
+PUT /contratos/:contratoId/producao   # upsert — cria se não existe, atualiza se já existe
+```
+
+Body de `PUT` (todos os campos são opcionais — Produção pode salvar parcial
+e completar depois; um `PUT` novo só sobrescreve os campos enviados):
+
+```json
+{
+  "numeroRomaneio": "ROM-2026-001",
+  "volumeRomaneioM3": 100,
+  "qtdContainersConfirmada": 4,
+  "observacoesProducao": "Carga separada, aguardando coleta.",
+  "dataCocEnviadaDespachante": "2026-02-01"
+}
+```
+
+- `contratoId` na URL precisa existir e pertencer à sua organização — senão
+  `404` (`{ "message": "Contrato não encontrado." }`), nunca `500`. Essa
+  checagem é feita explicitamente pela rota antes do upsert; a RLS do
+  Postgres (`detalhes_producao` só tem relação indireta com organização, via
+  `contrato_id` — ver migration `add_row_level_security`) é a segunda camada
+  por trás dela.
+- `volumeRomaneioM3`, se enviado, precisa ser `> 0`. `qtdContainersConfirmada`,
+  se enviado, precisa ser inteiro `>= 0`. Fora dessas faixas, `400`.
+- **Permissões**: leitura (`GET`) liberada a qualquer perfil autenticado,
+  igual às outras rotas. Escrita (`PUT`) restrita a `Administrador` e
+  `Operacional` — é o perfil mais próximo do setor de Produção (o schema não
+  tem um perfil "Produção" isolado). `Comercial`/`Financeiro`/`Ambiental`
+  recebem `403` ao tentar escrever aqui.
+
+### Smoke test automatizado (Fase 3 — Produção)
+
+`apps/api/scripts/smoke-test-fase3-producao.ts` reaproveita o setup de
+referências+contrato e o cliente HTTP já usados no smoke test da Fase 2
+(`scripts/smoke-test-fixtures.ts`, `scripts/smoke-test-helpers.ts` — nenhuma
+lógica duplicada entre os dois scripts). Cobre: `GET` antes de existir
+(`404`), `PUT` criando (com verificação dos campos salvos), `GET` depois,
+`PUT` atualizando (confirma que atualiza o mesmo registro, não duplica),
+validação de `volumeRomaneioM3` negativo (`400`), usuário `Comercial` sem
+permissão de escrita (`GET` `200` / `PUT` `403`), e `PUT` num `contratoId`
+inexistente (`404`). Limpa tudo no final, sucesso ou falha.
+
+```bash
+docker compose exec api npm run smoke:fase3-producao
+```
+
 ## Estrutura
 
 ```
@@ -355,8 +412,10 @@ apps/api/
     lib/          # prisma client, jwt sign/verify, paginação, tradução de erros do Prisma
     middleware/   # auth, tenant-scoping, roles
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
-                   # representantes, status-contrato, contratos; setoriais na Fase 3+)
+                   # representantes, status-contrato, contratos, detalhes-producao;
+                   # ambiental/logistica/financeiro ainda não existem)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
+  scripts/        # smoke tests por fase (smoke-test-fase2.ts, smoke-test-fase3-producao.ts, ...)
 apps/web/              # React + Vite
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```
