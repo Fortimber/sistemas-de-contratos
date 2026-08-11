@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais** (Produção e Ambiental validados; Logística e Financeiro ainda não — ver seção 7).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual: **Fase 3 — Módulos setoriais** (Produção, Ambiental e Logística validados; Financeiro ainda não — ver seção 7).
 
 ## Rodando localmente (Docker)
 
@@ -347,12 +347,12 @@ scoping, RLS ou nesses módulos:
 docker compose exec api npm run smoke:fase2
 ```
 
-## Módulos setoriais (Fase 3 — Produção e Ambiental)
+## Módulos setoriais (Fase 3 — Produção, Ambiental e Logística)
 
 Cada setor (Produção, Ambiental, Logística, Financeiro) é uma extensão 1:1
 de `contratos` — uma linha por contrato, preenchida aos poucos pelo setor
-responsável. Logística/Financeiro ainda **não** existem; cada setor é
-validado com seu próprio smoke test antes do próximo entrar.
+responsável. Financeiro ainda **não** existe; cada setor é validado com seu
+próprio smoke test antes do próximo entrar.
 
 ### Produção (`detalhes_producao`)
 
@@ -465,6 +465,70 @@ sucesso ou falha.
 docker compose exec api npm run smoke:fase3-ambiental
 ```
 
+### Logística (`detalhes_logistica`)
+
+```bash
+GET /contratos/:contratoId/logistica   # 404 se ainda não foi preenchido
+PUT /contratos/:contratoId/logistica   # upsert — cria se não existe, atualiza se já existe
+```
+
+Body de `PUT` (todos os campos são opcionais — mesmo espírito dos setores
+anteriores):
+
+```json
+{
+  "ciaMaritima": "...",
+  "nomeNavio": "...",
+  "booking": "...",
+  "containerNumero": "...",
+  "dataPrancha": "2026-01-20",
+  "dataDraftDocumentos": "2026-01-22",
+  "dataDraftCarga": "2026-01-23",
+  "dataColetaContainer": "2026-01-25",
+  "dataPosEmbarqueDocsCliente": "2026-01-28",
+  "dataEntradaPortoDestino": "2026-03-01",
+  "dataPrevistaSaidaNavio": "2026-01-30",
+  "dataNavioNoDestino": "2026-02-28",
+  "blNumero": "...",
+  "blData": "2026-01-29",
+  "portoDestinoPais": "...",
+  "motorista": "...",
+  "placaVeiculo": "...",
+  "pagamentoBl": "Sim"
+}
+```
+
+- Mesma checagem de `contratoId` (existe e pertence à sua organização antes
+  do upsert — `404` claro, nunca `500`) e mesma defesa em profundidade via
+  RLS que Produção/Ambiental.
+- `pagamentoBl`, se enviado, só aceita `Sim` ou `Não` — qualquer outro
+  valor responde `400`.
+- **Sem validação cruzada entre os 9 campos de data** (ex.: `dataPrancha`
+  antes de `dataColetaContainer` antes de `dataEntradaPortoDestino`...).
+  Isso é uma decisão em aberto, não uma omissão — ainda não existe regra de
+  negócio documentada sobre qual data precisa vir antes de qual nesse fluxo
+  logístico. Fica marcado como `TODO` no código
+  (`detalhes-logistica.routes.ts`); se essa regra for definida, validar do
+  mesmo jeito que já é feito em `detalhes-ambiental.routes.ts`.
+- **Permissões**: leitura (`GET`) liberada a qualquer perfil autenticado.
+  Escrita (`PUT`) restrita a `Administrador` e `Operacional` — não existe
+  perfil "Logística" dedicado no enum `PerfilAcesso` (mesma aproximação já
+  usada em Produção).
+
+### Smoke test automatizado (Fase 3 — Logística)
+
+`apps/api/scripts/smoke-test-fase3-logistica.ts` reaproveita os mesmos
+helpers/fixtures das rodadas anteriores. Cobre: `GET` antes de existir
+(`404`), `PUT` criando com `pagamentoBl="Sim"` (com verificação dos campos
+salvos), `GET` depois, `PUT` atualizando (mesmo registro, não duplica),
+`pagamentoBl` fora de `Sim`/`Não` (`400`), usuário `Financeiro` sem
+permissão de escrita (`GET` `200` / `PUT` `403`), e `PUT` num `contratoId`
+inexistente (`404`). Limpa tudo no final, sucesso ou falha.
+
+```bash
+docker compose exec api npm run smoke:fase3-logistica
+```
+
 ## Estrutura
 
 ```
@@ -474,10 +538,10 @@ apps/api/
     middleware/   # auth, tenant-scoping, roles
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
                    # representantes, status-contrato, contratos, detalhes-producao,
-                   # detalhes-ambiental; logistica/financeiro ainda não existem)
+                   # detalhes-ambiental, detalhes-logistica; financeiro ainda não existe)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
   scripts/        # smoke tests por fase (smoke-test-fase2.ts, smoke-test-fase3-producao.ts,
-                   # smoke-test-fase3-ambiental.ts, ...)
+                   # smoke-test-fase3-ambiental.ts, smoke-test-fase3-logistica.ts, ...)
 apps/web/              # React + Vite
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```

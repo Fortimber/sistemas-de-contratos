@@ -11,6 +11,7 @@ import { statusContratoRoutes } from "../modules/status-contrato/status-contrato
 import { contratosRoutes } from "../modules/contratos/contratos.routes.js";
 import { detalhesProducaoRoutes } from "../modules/detalhes-producao/detalhes-producao.routes.js";
 import { detalhesAmbientalRoutes } from "../modules/detalhes-ambiental/detalhes-ambiental.routes.js";
+import { detalhesLogisticaRoutes } from "../modules/detalhes-logistica/detalhes-logistica.routes.js";
 
 /**
  * Contexto protegido: autenticação + tenant-scoping registrados uma única
@@ -35,7 +36,8 @@ export async function protectedContext(app: FastifyInstance) {
   await app.register(statusContratoRoutes);
   await app.register(contratosRoutes);
 
-  // Fase 3 — módulos setoriais (Produção + Ambiental nesta rodada).
+  // Fase 3 — módulos setoriais (Produção + Ambiental + Logística nesta rodada).
   await app.register(detalhesProducaoRoutes);
   await app.register(detalhesAmbientalRoutes);
+  await app.register(detalhesLogisticaRoutes);
 }
