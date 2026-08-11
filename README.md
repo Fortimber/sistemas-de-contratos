@@ -332,6 +332,21 @@ os opcionais indicados):
   gerar histórico ainda (isso é Fase 4, tabela `historico_status_contrato`).
 - Não existe `DELETE /contratos/:id` nesta fase.
 
+### Smoke test automatizado (Fase 2)
+
+`apps/api/scripts/smoke-test-fase2.ts` roda os 11 cenários acima (criação
+das referências, contrato, listagem, filtro, edição, número duplicado,
+exclusão de referência em uso, usuário `Operacional` sem permissão de
+escrita, e isolamento cruzado entre organizações) via HTTP de verdade contra
+a API já no ar, imprime `PASS`/`FAIL` por passo, para no primeiro `FAIL`, e
+sempre limpa todo o dado de teste no final (sucesso ou falha) — não deixa
+lixo no banco. Reusar como regressão sempre que mexer em auth, tenant-
+scoping, RLS ou nesses módulos:
+
+```bash
+docker compose exec api npm run smoke:fase2
+```
+
 ## Estrutura
 
 ```
