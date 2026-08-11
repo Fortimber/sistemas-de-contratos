@@ -3,12 +3,16 @@ import { Label as LabelPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
-function Label({
-  className,
-  ...props
-}: React.ComponentProps<typeof LabelPrimitive.Root>) {
+// forwardRef explícito — mesmo motivo do fix em Input/Dialog/Button/Card/
+// Checkbox: preset radix-nova assume o modelo de ref-como-prop do React 19,
+// projeto está no React 18.
+const Label = React.forwardRef<
+  React.ComponentRef<typeof LabelPrimitive.Root>,
+  React.ComponentProps<typeof LabelPrimitive.Root>
+>(({ className, ...props }, ref) => {
   return (
     <LabelPrimitive.Root
+      ref={ref}
       data-slot="label"
       className={cn(
         "flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
@@ -17,6 +21,7 @@ function Label({
       {...props}
     />
   )
-}
+})
+Label.displayName = LabelPrimitive.Root.displayName
 
 export { Label }

@@ -68,28 +68,39 @@ function useFormField() {
   }
 }
 
-function FormItem({ className, ...props }: React.ComponentProps<"div">) {
-  const id = React.useId()
+// FormItem/FormLabel/FormDescription/FormMessage usam forwardRef explícito
+// — mesmo motivo do fix em Input/Dialog/Button/Card/Checkbox/Label/Select/
+// Table: preset radix-nova assume o modelo de ref-como-prop do React 19,
+// projeto está no React 18. FormControl fica de fora de propósito: já
+// renderiza Slot.Root do próprio Radix, que resolve ref-forwarding sozinho
+// pro filho — não introduz uma camada de function component sem forwardRef.
+const FormItem = React.forwardRef<HTMLDivElement, React.ComponentProps<"div">>(
+  ({ className, ...props }, ref) => {
+    const id = React.useId()
 
-  return (
-    <FormItemContext.Provider value={{ id }}>
-      <div
-        data-slot="form-item"
-        className={cn("grid gap-2", className)}
-        {...props}
-      />
-    </FormItemContext.Provider>
-  )
-}
+    return (
+      <FormItemContext.Provider value={{ id }}>
+        <div
+          ref={ref}
+          data-slot="form-item"
+          className={cn("grid gap-2", className)}
+          {...props}
+        />
+      </FormItemContext.Provider>
+    )
+  }
+)
+FormItem.displayName = "FormItem"
 
-function FormLabel({
-  className,
-  ...props
-}: React.ComponentProps<typeof Label>) {
+const FormLabel = React.forwardRef<
+  React.ComponentRef<typeof Label>,
+  React.ComponentProps<typeof Label>
+>(({ className, ...props }, ref) => {
   const { error, formItemId } = useFormField()
 
   return (
     <Label
+      ref={ref}
       data-slot="form-label"
       data-error={!!error}
       className={cn("data-[error=true]:text-destructive", className)}
@@ -97,7 +108,8 @@ function FormLabel({
       {...props}
     />
   )
-}
+})
+FormLabel.displayName = "FormLabel"
 
 function FormControl({ ...props }: React.ComponentProps<typeof Slot.Root>) {
   const { error, formItemId, formDescriptionId, formMessageId } =
@@ -118,38 +130,46 @@ function FormControl({ ...props }: React.ComponentProps<typeof Slot.Root>) {
   )
 }
 
-function FormDescription({ className, ...props }: React.ComponentProps<"p">) {
-  const { formDescriptionId } = useFormField()
+const FormDescription = React.forwardRef<HTMLParagraphElement, React.ComponentProps<"p">>(
+  ({ className, ...props }, ref) => {
+    const { formDescriptionId } = useFormField()
 
-  return (
-    <p
-      data-slot="form-description"
-      id={formDescriptionId}
-      className={cn("text-muted-foreground text-sm", className)}
-      {...props}
-    />
-  )
-}
-
-function FormMessage({ className, ...props }: React.ComponentProps<"p">) {
-  const { error, formMessageId } = useFormField()
-  const body = error ? String(error?.message ?? "") : props.children
-
-  if (!body) {
-    return null
+    return (
+      <p
+        ref={ref}
+        data-slot="form-description"
+        id={formDescriptionId}
+        className={cn("text-muted-foreground text-sm", className)}
+        {...props}
+      />
+    )
   }
+)
+FormDescription.displayName = "FormDescription"
 
-  return (
-    <p
-      data-slot="form-message"
-      id={formMessageId}
-      className={cn("text-destructive text-sm", className)}
-      {...props}
-    >
-      {body}
-    </p>
-  )
-}
+const FormMessage = React.forwardRef<HTMLParagraphElement, React.ComponentProps<"p">>(
+  ({ className, ...props }, ref) => {
+    const { error, formMessageId } = useFormField()
+    const body = error ? String(error?.message ?? "") : props.children
+
+    if (!body) {
+      return null
+    }
+
+    return (
+      <p
+        ref={ref}
+        data-slot="form-message"
+        id={formMessageId}
+        className={cn("text-destructive text-sm", className)}
+        {...props}
+      >
+        {body}
+      </p>
+    )
+  }
+)
+FormMessage.displayName = "FormMessage"
 
 export {
   useFormField,

@@ -4,11 +4,13 @@ import { cn } from "@/lib/utils"
 
 // forwardRef explícito (não a assinatura padrão gerada pelo shadcn CLI para
 // este preset, que assume o modelo de ref-como-prop do React 19): o
-// projeto está no React 18, e o FormControl (form.tsx) usa Slot.Root pra
-// repassar a ref do react-hook-form pro input — sem forwardRef aqui, o
-// React avisa "Function components cannot be given refs" no console toda
-// vez que Input é usado dentro de um FormField (achado real ao testar a
-// tela de login).
+// projeto está no React 18. O react-hook-form sempre inclui uma `ref` no
+// objeto `field` que `<Input {...field} />` espalha (usa pra focar o campo
+// automaticamente num erro de validação) — sem forwardRef aqui, o React
+// avisa "Function components cannot be given refs" no console toda vez que
+// Input é usado dentro de um FormField (achado real ao testar a tela de
+// login). Auditoria completa dos demais componentes shadcn instalados
+// (mesma causa raiz) na Fase 2 — ver README, seção "Frontend".
 const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
   ({ className, type, ...props }, ref) => {
     return (

@@ -41,20 +41,23 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
-  className,
-  variant = "default",
-  size = "default",
-  asChild = false,
-  ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean
-  }) {
+// forwardRef explícito — mesmo motivo do fix em Input/Dialog (Fases 1 e 2):
+// preset radix-nova assume o modelo de ref-como-prop do React 19, projeto
+// está no React 18. Button é usado com `asChild` dentro de
+// DialogPrimitive.Close/Trigger em alguns lugares — o mecanismo de asChild
+// do Radix clona o filho anexando ref, o que quebraria aqui sem isso.
+const Button = React.forwardRef<
+  HTMLButtonElement,
+  React.ComponentProps<"button"> &
+    VariantProps<typeof buttonVariants> & {
+      asChild?: boolean
+    }
+>(({ className, variant = "default", size = "default", asChild = false, ...props }, ref) => {
   const Comp = asChild ? Slot.Root : "button"
 
   return (
     <Comp
+      ref={ref}
       data-slot="button"
       data-variant={variant}
       data-size={size}
@@ -62,6 +65,7 @@ function Button({
       {...props}
     />
   )
-}
+})
+Button.displayName = "Button"
 
 export { Button, buttonVariants }

@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica) e Fase 1 (login + proteção de rotas) prontas, ver seção "Frontend" abaixo. Próxima: Fase 2 do frontend (primeiras telas de negócio).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica), Fase 1 (login + proteção de rotas) e Fase 2 (telas de referências + contratos) prontas, ver seção "Frontend" abaixo. Próxima: Fase 3 do frontend (telas dos módulos setoriais).
 
 ## Rodando localmente (Docker)
 
@@ -672,7 +672,7 @@ docker compose exec api npm run smoke:fase3-financeiro && \
 docker compose exec api npm run smoke:fase4
 ```
 
-## Frontend (Fase 0 — fundação; Fase 1 — login)
+## Frontend (Fase 0 — fundação; Fase 1 — login; Fase 2 — referências e contratos)
 
 ### Fase 0 — fundação técnica
 
@@ -774,6 +774,106 @@ cookie e redireciona pra `/login`; acessar `/` diretamente depois do
 logout volta pra `/login`. Console do navegador sem erros em nenhum desses
 passos (depois dos dois achados acima corrigidos).
 
+### Fase 2 — referências e contratos
+
+**Referências** (`src/features/referencias/`): as 5 tabelas de referência
+(espécies, produtos, importadores, representantes, status de contrato) são
+telas de CRUD (listar paginado, criar/editar num dialog, excluir com
+confirmação) — mas nenhuma delas foi escrita à mão. Todas usam o mesmo
+componente genérico e configurável:
+
+- **`reference-crud-page.tsx`** (`ReferenceCrudPage`): recebe uma
+  `ReferenceCrudConfig` (título, endpoint, colunas da tabela, campos do
+  formulário, schema Zod) e monta listagem + paginação + dialog de criar/
+  editar + dialog de exclusão sozinho. Cada `*-page.tsx` (`especies-page.tsx`,
+  `produtos-page.tsx`, ...) só declara sua config — nenhuma tem lógica de
+  CRUD própria. `produtos-page.tsx` é o único caso com um campo `select`
+  alimentado por outra tabela (espécie): busca a lista de espécies uma vez
+  (`useEspecies`) e usa o resultado tanto nas opções do formulário quanto
+  no lookup id → nome da coluna "Espécie" da tabela (a API não populariza
+  essa relação em `GET /produtos`, só devolve o id).
+- **Botões de criar/editar/excluir só aparecem pra `Administrador`/
+  `Comercial`** (`src/lib/permissions.ts`, `canWriteReferences`) — espelha
+  exatamente `requireRole("Administrador", "Comercial")` que já protege
+  essas rotas na API. Isso é **só UX** (esconder o que a pessoa não vai
+  poder usar); a permissão de verdade é sempre checada no backend, mesmo
+  que alguém monte a requisição direto.
+- Concordância de gênero (`ReferenceCrudConfig.genero`): "Nova espécie",
+  não "Novo espécie" — achado real testando no navegador.
+
+**Contratos** (`src/features/contratos/`):
+
+- **Lista** (`contratos-list-page.tsx`): paginada, com filtro por status e
+  importador — os filtros vivem na própria URL (`useSearchParams`), não em
+  estado local, então dá pra copiar/voltar/recarregar sem perder o filtro
+  aplicado. Mesma situação de "API não populariza relação na listagem": a
+  coluna "Importador"/"Status" usa um lookup id → nome (reaproveita as
+  mesmas listas de referência que alimentam os `<Select>` de filtro).
+- **`contrato-form.tsx`**: formulário único, reusado por criar
+  (`contrato-create-page.tsx`) e editar (`contrato-edit-page.tsx`) — a
+  página de edição só decide como buscar os dados iniciais (`useContrato`)
+  e o que fazer no submit (`PATCH` em vez de `POST`); o formulário em si é
+  o mesmo. Campos com valor sugerido documentado no `schema.prisma` mas não
+  validado como enum pela API (`local`, `moedaValorTotal`,
+  `modalidadePgtConta*`) viram `<Select>` mesmo assim — orientação de UX/
+  qualidade de dado, não uma regra de segurança nova (a API aceita
+  qualquer string não-vazia do mesmo jeito).
+- **Detalhe** (`contrato-detail-page.tsx`): mostra os dados com as relações
+  já populadas (`importador.nomeRazaoSocial`, `status.nomeStatus`, etc. —
+  `GET /contratos/:id` inclui essas relações, ao contrário da listagem).
+  Sem tela de exclusão: a API não tem `DELETE /contratos/:id` (contratos
+  não são apagáveis, só editáveis — trilha de auditoria fica íntegra).
+
+**Achado real, corrigido durante a verificação manual**: o mesmo problema
+de `forwardRef` da Fase 1 (ver achado #1 acima) apareceu de novo, agora em
+`Dialog` — `DialogOverlay`/`DialogContent` (`components/ui/dialog.tsx`)
+também são gerados pelo preset `radix-nova` sem `React.forwardRef`, e o
+mecanismo de Portal/Presence do Radix (usado pra animação de abrir/fechar)
+tenta anexar uma ref a eles. Só apareceu agora porque a Fase 2 foi a
+primeira vez que um `Dialog` de verdade abriu em teste manual no navegador
+— não tinha como pegar isso só lendo código.
+
+**Auditoria completa de `forwardRef`** (pedida explicitamente antes de
+fechar a Fase 2, depois do achado do `Dialog`): todo componente em
+`src/components/ui/` foi conferido pela mesma causa raiz — função sem
+`React.forwardRef` envolvendo diretamente um elemento DOM ou primitivo
+Radix único, no preset `radix-nova` (que assume o modelo de ref-como-prop
+do React 19; o projeto está no React 18). Duas rotas diferentes disparam o
+aviso "Function components cannot be given refs": (a) o react-hook-form
+sempre inclui uma `ref` no objeto `field` que `{...field}` espalha (caso do
+`Input`); (b) o mecanismo de Portal/Presence do próprio Radix, que anexa
+ref pra detectar fim de animação, independente de qualquer código nosso
+(caso do `Dialog`). Resultado da auditoria:
+
+| Componente | Tinha o bug? | Onde/por quê |
+| --- | --- | --- |
+| `Input` | Sim (corrigido na Fase 1) | `{...field}` do RHF inclui `ref` |
+| `Dialog` — `Overlay`, `Content`, `Trigger`, `Close`, `Header`, `Footer`, `Title`, `Description` | Sim (corrigido na Fase 2) | `Overlay`/`Content`: Portal/Presence do Radix; os demais: mesmo padrão, risco latente com `asChild` |
+| `Button` | Sim (corrigido nesta auditoria) | usado com `asChild` dentro de `DialogPrimitive.Close`/`Trigger` |
+| `Card` (7 subcomponentes) | Sim (corrigido nesta auditoria) | não estava em uso de um jeito que dispara o aviso ainda, mas tinha a mesma forma estrutural |
+| `Checkbox` | Sim (corrigido nesta auditoria) | já usado dentro de `FormControl` em `contrato-form.tsx`; não disparava porque o código liga `checked`/`onCheckedChange` a dedo, não `{...field}` — um `ref` futuro quebraria do mesmo jeito que `Input` |
+| `Label` | Sim (corrigido nesta auditoria) | mesma forma estrutural (wrapper de um primitivo Radix único) |
+| `Select` (9 subcomponentes, exceto o `Root`) | Sim (corrigido nesta auditoria) | mesma razão do `Checkbox`: código atual evita `ref`, mas a estrutura tinha o mesmo risco |
+| `Table` (7 subcomponentes) | Sim (corrigido nesta auditoria) | mesma forma estrutural |
+| `Form` — `FormItem`, `FormLabel`, `FormDescription`, `FormMessage` | Sim (corrigido nesta auditoria) | mesma forma estrutural |
+| `Dialog` (Root), `DialogPortal`, `Select` (Root), `FormControl`, `FormField` | **Não** — corretos por design | são componentes só lógicos (sem nó DOM próprio) ou já delegam pro `Slot.Root` do próprio Radix, que resolve ref-forwarding sozinho — não faz sentido/não precisa de `forwardRef` |
+
+Todos os componentes corrigidos seguem o mesmo padrão: `React.forwardRef`
+explícito com `ref` repassada pro elemento/primitivo real, e
+`displayName` setado (usa o do próprio primitivo Radix quando existe, ou
+um literal pros que só envolvem HTML puro).
+
+**Verificado de ponta a ponta num navegador real (Chrome, via
+claude-in-chrome)**: criada 1 espécie, 1 produto (associado à espécie), 1
+importador, 1 representante e 1 status de contrato — todos via os dialogs
+de criação, cada um refletindo na tabela certa; criado 1 contrato usando
+essas 5 referências (dropdowns todos alimentados corretamente); contrato
+editado (volume alterado) e a mudança confirmada na tela de detalhe;
+filtro por status aplicado na lista (refletido na URL) e limpo de volta;
+depois da auditoria, reconfirmado editar/excluir de referência (dialogs) e
+o checkbox do formulário de contrato. Console do navegador sem erros em
+nenhum passo, em nenhuma dessas rodadas.
+
 ## Estrutura
 
 ```
@@ -790,15 +890,22 @@ apps/api/
                    # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
                    # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
                    # smoke-test-fase4.ts)
-apps/web/          # React + Vite — Fases 0 e 1 prontas, ver seção "Frontend" acima
+apps/web/          # React + Vite — Fases 0, 1 e 2 prontas, ver seção "Frontend" acima
   src/
     components/
-      layout/     # AppLayout, Sidebar (logout)
-      ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form)
-      full-page-loading.tsx # estado de carregamento (boot da sessão)
+      layout/     # AppLayout, Sidebar (navegação + logout)
+      ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form, checkbox)
+      full-page-loading.tsx  # estado de carregamento (boot da sessão)
+      pagination-controls.tsx # Anterior/Próxima — reusado por referências e contratos
+    features/
+      referencias/  # especies/produtos/importadores/representantes/status-contrato-page.tsx
+                     # (config sobre reference-crud-page.tsx, o CRUD genérico), hooks.ts, types.ts
+      contratos/    # contratos-list-page, contrato-create/edit/detail-page, contrato-form.tsx
+                     # (formulário único, reusado por criar e editar), hooks.ts, types.ts
     lib/          # api-client (fetch central + refreshSession deduplicado), auth-context
-                   # (AuthProvider/useAuth), query-client (TanStack Query), utils (cn)
-    pages/        # páginas roteadas (home-page.tsx — placeholder —, login-page.tsx)
+                   # (AuthProvider/useAuth), permissions (canWriteReferences), pagination
+                   # (types Paginated/PaginationMeta), query-client (TanStack Query), utils (cn)
+    pages/        # login-page.tsx
     routes/       # route-guards (ProtectedRoute, PublicOnlyRoute)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```
