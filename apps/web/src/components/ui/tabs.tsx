@@ -3,21 +3,29 @@ import { Tabs as TabsPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
-// Root fica de fora do forwardRef de propósito — mesmo motivo de Select
-// (Root)/Dialog (Root) em select.tsx/dialog.tsx: componente só lógico, sem
-// nó DOM próprio.
-function Tabs({
-  className,
-  ...props
-}: React.ComponentProps<typeof TabsPrimitive.Root>) {
+// forwardRef explícito — AO CONTRÁRIO de Select (Root)/Dialog (Root) em
+// select.tsx/dialog.tsx (que não renderizam nó DOM próprio, só contexto),
+// Tabs.Root do Radix real renderiza um `<div>` de verdade internamente via
+// forwardRef (conferido no pacote instalado,
+// apps/web/node_modules/@radix-ui/react-tabs: `Primitive.div` com
+// `ref: forwardedRef`) — teria o mesmo bug de "Function components cannot
+// be given refs" que Input teve na Fase 1 se algo aqui passasse a
+// encaminhar ref (ex.: um futuro `asChild`), mesma razão de TabsList/
+// TabsTrigger/TabsContent abaixo.
+const Tabs = React.forwardRef<
+  React.ComponentRef<typeof TabsPrimitive.Root>,
+  React.ComponentProps<typeof TabsPrimitive.Root>
+>(({ className, ...props }, ref) => {
   return (
     <TabsPrimitive.Root
+      ref={ref}
       data-slot="tabs"
       className={cn("flex flex-col gap-4", className)}
       {...props}
     />
   )
-}
+})
+Tabs.displayName = TabsPrimitive.Root.displayName
 
 // List/Trigger/Content usam forwardRef explícito — mesmo motivo do fix em
 // Input/Dialog/Button/Card/Checkbox/Label/Select/Table/Form: preset

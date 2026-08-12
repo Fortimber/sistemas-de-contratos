@@ -28,7 +28,14 @@ DialogTrigger.displayName = DialogPrimitive.Trigger.displayName
 
 // DialogPortal fica de fora do forwardRef de propósito: é um componente só
 // lógico (não renderiza nenhum nó DOM próprio), mesma decisão de Dialog
-// (Root) acima.
+// (Root) acima. Reverificado na Fase 3 (motivado pelo bug real encontrado em
+// Tabs.Root, ver tabs.tsx): DialogPortal do @radix-ui/react-dialog não é o
+// mesmo componente que Portal do @radix-ui/react-portal (que de fato
+// renderiza `<div>` via forwardRef) — DialogPortal só compõe
+// Presence+Portal internamente com `asChild`, então nenhum `<div>` extra é
+// renderizado por ele mesmo (confirmado tanto no código-fonte instalado
+// quanto pelo erro de tipo do TS ao tentar aceitar `ref` aqui:
+// `DialogPortalProps` não tem essa prop porque o componente real não a usa).
 function DialogPortal({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
