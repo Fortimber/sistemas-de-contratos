@@ -2,9 +2,14 @@ import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/lib/auth-context";
 import { canWriteReferences } from "@/lib/permissions";
 import { useContrato } from "./hooks";
+import { AmbientalTab } from "./setores/ambiental-tab";
+import { FinanceiroTab } from "./setores/financeiro-tab";
+import { LogisticaTab } from "./setores/logistica-tab";
+import { ProducaoTab } from "./setores/producao-tab";
 
 function formatValor(valor: string, moeda: string): string {
   return `${moeda} ${Number(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -128,6 +133,30 @@ export function ContratoDetailPage() {
           </dl>
         </CardContent>
       </Card>
+
+      <div>
+        <h2 className="mb-2 text-sm font-medium text-muted-foreground">Módulos setoriais</h2>
+        <Tabs defaultValue="producao">
+          <TabsList>
+            <TabsTrigger value="producao">Produção</TabsTrigger>
+            <TabsTrigger value="ambiental">Ambiental</TabsTrigger>
+            <TabsTrigger value="logistica">Logística</TabsTrigger>
+            <TabsTrigger value="financeiro">Financeiro</TabsTrigger>
+          </TabsList>
+          <TabsContent value="producao">
+            <ProducaoTab contratoId={c.id} />
+          </TabsContent>
+          <TabsContent value="ambiental">
+            <AmbientalTab contratoId={c.id} />
+          </TabsContent>
+          <TabsContent value="logistica">
+            <LogisticaTab contratoId={c.id} />
+          </TabsContent>
+          <TabsContent value="financeiro">
+            <FinanceiroTab contratoId={c.id} />
+          </TabsContent>
+        </Tabs>
+      </div>
     </div>
   );
 }

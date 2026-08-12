@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica), Fase 1 (login + proteção de rotas) e Fase 2 (telas de referências + contratos) prontas, ver seção "Frontend" abaixo. Próxima: Fase 3 do frontend (telas dos módulos setoriais).
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica), Fase 1 (login + proteção de rotas), Fase 2 (telas de referências + contratos) e Fase 3 (abas dos módulos setoriais na tela de detalhe do contrato) prontas, ver seção "Frontend" abaixo. Próxima: Fase 4 do frontend.
 
 ## Rodando localmente (Docker)
 
@@ -672,7 +672,7 @@ docker compose exec api npm run smoke:fase3-financeiro && \
 docker compose exec api npm run smoke:fase4
 ```
 
-## Frontend (Fase 0 — fundação; Fase 1 — login; Fase 2 — referências e contratos)
+## Frontend (Fase 0 — fundação; Fase 1 — login; Fase 2 — referências e contratos; Fase 3 — módulos setoriais)
 
 ### Fase 0 — fundação técnica
 
@@ -874,6 +874,113 @@ depois da auditoria, reconfirmado editar/excluir de referência (dialogs) e
 o checkbox do formulário de contrato. Console do navegador sem erros em
 nenhum passo, em nenhuma dessas rodadas.
 
+### Fase 3 — módulos setoriais
+
+A tela de detalhe do contrato (`contrato-detail-page.tsx`) ganhou uma seção
+"Módulos setoriais" com 4 abas (`Tabs` do shadcn/ui, componente novo desta
+fase — `src/components/ui/tabs.tsx`, escrito à mão como `form.tsx` na Fase
+0, mesmo padrão `forwardRef` dos demais componentes deste preset): Produção,
+Ambiental, Logística, Financeiro. Cada aba busca `GET
+/contratos/:id/<setor>` só quando fica ativa; `404` (setor ainda não
+preenchido) não é tratado como erro — vira "mostrar formulário vazio" — e
+qualquer outro erro (403, 500, rede) mostra mensagem de falha. Salvar é
+sempre `PUT` (upsert), igual a API.
+
+**`src/features/contratos/setores/`** — tudo desta fase:
+
+- **`field-config.ts`**: descreve declarativamente os campos de um setor
+  (`text`/`date`/`number`/`select`/`boolean`) — a mesma lista alimenta o
+  formulário e a visão somente-leitura, pra não repetir nome/label de campo
+  duas vezes por setor (Financeiro sozinho tem quase 30 campos).
+- **`sector-form.tsx`** (`SectorForm`): formulário genérico dirigido por
+  `fields`, mesmo espírito de `ReferenceCrudPage` (Fase 2) generalizado pra
+  cobrir também `date`/`boolean`. Todo campo — inclusive os numéricos/
+  monetários — vive no formulário como `string` (nunca `number`), mesma
+  decisão de `comissaoPct`/`comissaoMetragem` em `contrato-form.tsx`: evita
+  qualquer arredondamento intermediário; a conversão pra `number` só
+  acontece uma vez, em `sectorFormValuesToPayload`, direto na string exata
+  vinda da API ou digitada pelo usuário, nunca reformatada no meio do
+  caminho. Campos vazios não entram no `PUT` (upsert parcial). `<Select>`
+  usa um sentinela (`SETOR_SELECT_VAZIO`) pro estado "não selecionado" —
+  mesmo problema já resolvido em `contrato-form.tsx` (Radix Select não
+  aceita `value=""`), aqui necessário pros 4 selects porque todos são
+  opcionais.
+- **`sector-read-only.tsx`** (`SectorReadOnly`): mesma lista de `fields`,
+  troca input editável por texto estático (`dt`/`dd`, mesmo padrão do
+  `Field` de `contrato-detail-page.tsx`) — usada quando o usuário logado
+  não tem permissão de escrita na aba.
+- **`sector-tab.tsx`** (`SectorTab`): casca comum às 4 abas — decide entre
+  carregando / erro / formulário editável / somente-leitura / "ainda não
+  preenchido"; a única coisa que muda de um setor pro outro é `fields` e os
+  hooks de dados.
+- **`hooks.ts`**: par de hooks por setor (`useDetalhesProducao`/
+  `useSalvarDetalhesProducao`, etc.), construídos sobre uma factory
+  genérica (`useDetalhesSetor`/`useSalvarDetalhesSetor`) que já resolve o
+  caso do `404` acima.
+- **`producao-tab.tsx`/`ambiental-tab.tsx`/`logistica-tab.tsx`/
+  `financeiro-tab.tsx`**: só declaram `fields` (espelhando exatamente
+  `DetalhesProducao`/`DetalhesAmbiental`/`DetalhesLogistica`/
+  `DetalhesFinanceiro` do `schema.prisma`) e chamam `SectorTab` com os
+  hooks certos. Ambiental usa `<Select>` pros 3 campos de status
+  (`lpcoStatus`, `citesStatus`, `statusAprovacaoCocCliente`) e Logística
+  pro `pagamentoBl` — mesmas listas fixas que a API já valida. Financeiro
+  usa texto livre pros 3 campos sem lista fixa documentada
+  (`statusEmbarqueXCambio`, `statusGeralCambio`, `formaPagamento`) — mesma
+  decisão em aberto que já existe no backend (ver
+  `detalhes-financeiro.routes.ts`).
+
+**Permissão de escrita por aba** (`src/lib/permissions.ts`,
+`canWriteSector`) — espelha exatamente o `requireRole(...)` de cada
+`detalhes-*.routes.ts` na API: Produção e Logística exigem
+`Administrador`/`Operacional`; Ambiental exige `Administrador`/`Ambiental`;
+Financeiro exige `Administrador`/`Financeiro`. Mesma filosofia de UX da
+Fase 2 (`canWriteReferences`): quando o perfil logado não tem permissão na
+aba, `SectorTab` renderiza `SectorReadOnly` em vez do formulário (sem botão
+salvar) — é só esconder o que a pessoa não vai poder usar mesmo; a
+segurança de verdade continua sendo o backend respondendo `403`.
+
+**Precisão dos campos monetários do Financeiro**: a API serializa `Decimal`
+como string (`"12345.68"`, ver seção "Precisão monetária" acima). O
+formulário trata esses campos como texto formatado ponta a ponta — o valor
+que chega do `GET` vai direto pro campo do formulário sem passar por
+`Number(...)`, e só vira `number` (pro JSON do `PUT`, que exige `number`
+no schema Ajv) na hora exata de montar o payload, na string exata que
+estava no campo. Testado na prática com `taxaCambial` (`Decimal(10,6)`,
+mais casas decimais que os demais campos): enviado `5.4321`, confirmado no
+banco como `5.432100` e reexibido no formulário como `5.4321` depois de um
+reload — nenhuma perda/alteração de precisão em nenhum ponto do caminho.
+
+**Verificado de ponta a ponta num navegador real (Chrome, via
+claude-in-chrome)**, com dois usuários:
+
+- **Administrador** (acesso total): preenchido e salvo com sucesso um
+  contrato existente nas 4 abas — Produção (5 campos), Ambiental (15
+  campos, incluindo os 3 `<Select>`), Logística (18 campos, incluindo
+  `pagamentoBl`), Financeiro (29 campos, incluindo o checkbox
+  `comissaoSobreVenda` e os 3 campos de texto livre). Cada `PUT`
+  confirmado direto no Postgres (`docker compose exec postgres psql`), e
+  reconfirmado via reload da página (formulário volta pré-preenchido com
+  os mesmos valores, `<Select>` com a opção certa marcada).
+- **Usuário de teste de perfil único** (`teste-ambiental`, perfil
+  `Ambiental`, criado via SQL direto só pra este teste e removido ao
+  final): a aba Ambiental apareceu como formulário editável (salvou uma
+  edição com sucesso, confirmada no banco); as outras 3 abas (Produção,
+  Logística, Financeiro) apareceram somente-leitura — sem nenhum campo
+  editável nem botão "Salvar" — mostrando exatamente os dados já salvos
+  pelo administrador, incluindo os valores monetários do Financeiro como
+  texto puro (`12345.68`, `5.4321`, ...), sem arredondamento.
+
+Console do navegador sem erros em nenhuma das duas rodadas.
+
+**Achado de ambiente (não é bug do código)**: durante o teste manual, o
+Radix `<Select>` ocasionalmente não confirmava a seleção num primeiro
+clique de mouse simulado (a UI reabria em "Não selecionado" depois de
+"selecionar" uma opção) — atribuído a lag geral do ambiente de automação
+do navegador (Docker Desktop tinha acabado de subir), não a um problema no
+componente: a mesma seleção via teclado (setas + Enter, que dispara o
+mesmo `onValueChange`) e cliques repetidos sempre funcionaram, e o valor
+salvo no banco sempre bateu com o que a tela mostrava no momento do envio.
+
 ## Estrutura
 
 ```
@@ -890,11 +997,11 @@ apps/api/
                    # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
                    # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
                    # smoke-test-fase4.ts)
-apps/web/          # React + Vite — Fases 0, 1 e 2 prontas, ver seção "Frontend" acima
+apps/web/          # React + Vite — Fases 0, 1, 2 e 3 prontas, ver seção "Frontend" acima
   src/
     components/
       layout/     # AppLayout, Sidebar (navegação + logout)
-      ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form, checkbox)
+      ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form, checkbox, tabs)
       full-page-loading.tsx  # estado de carregamento (boot da sessão)
       pagination-controls.tsx # Anterior/Próxima — reusado por referências e contratos
     features/
@@ -902,9 +1009,13 @@ apps/web/          # React + Vite — Fases 0, 1 e 2 prontas, ver seção "Front
                      # (config sobre reference-crud-page.tsx, o CRUD genérico), hooks.ts, types.ts
       contratos/    # contratos-list-page, contrato-create/edit/detail-page, contrato-form.tsx
                      # (formulário único, reusado por criar e editar), hooks.ts, types.ts
+        setores/    # abas Produção/Ambiental/Logística/Financeiro da tela de detalhe (Fase 3):
+                     # field-config.ts (schema declarativo dos campos por setor), sector-form.tsx
+                     # (formulário genérico), sector-read-only.tsx, sector-tab.tsx (casca comum),
+                     # hooks.ts (GET+PUT por setor), producao/ambiental/logistica/financeiro-tab.tsx
     lib/          # api-client (fetch central + refreshSession deduplicado), auth-context
-                   # (AuthProvider/useAuth), permissions (canWriteReferences), pagination
-                   # (types Paginated/PaginationMeta), query-client (TanStack Query), utils (cn)
+                   # (AuthProvider/useAuth), permissions (canWriteReferences, canWriteSector),
+                   # pagination (types Paginated/PaginationMeta), query-client (TanStack Query), utils (cn)
     pages/        # login-page.tsx
     routes/       # route-guards (ProtectedRoute, PublicOnlyRoute)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)

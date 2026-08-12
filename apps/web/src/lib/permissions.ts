@@ -18,3 +18,30 @@ const WRITE_ROLES: PerfilAcesso[] = ["Administrador", "Comercial"];
 export function canWriteReferences(perfilAcesso: PerfilAcesso | undefined): boolean {
   return !!perfilAcesso && WRITE_ROLES.includes(perfilAcesso);
 }
+
+/**
+ * Permissão de escrita por aba setorial (tela de detalhe do contrato, Fase
+ * 3 do frontend) — espelha exatamente o `WRITE_ROLES` de cada
+ * `detalhes-*.routes.ts` na API:
+ * - Produção/Logística: `requireRole("Administrador", "Operacional")` (não
+ *   existe perfil "Produção"/"Logística" isolado no enum `PerfilAcesso`).
+ * - Ambiental: `requireRole("Administrador", "Ambiental")`.
+ * - Financeiro: `requireRole("Administrador", "Financeiro")`.
+ *
+ * Mesma ressalva de `canWriteReferences`: isto só esconde o formulário de
+ * quem não vai poder salvar mesmo (UX); a permissão de verdade é o `PUT`
+ * respondendo `403` no backend.
+ */
+const SECTOR_WRITE_ROLES: Record<"producao" | "ambiental" | "logistica" | "financeiro", PerfilAcesso[]> = {
+  producao: ["Administrador", "Operacional"],
+  ambiental: ["Administrador", "Ambiental"],
+  logistica: ["Administrador", "Operacional"],
+  financeiro: ["Administrador", "Financeiro"],
+};
+
+export function canWriteSector(
+  setor: "producao" | "ambiental" | "logistica" | "financeiro",
+  perfilAcesso: PerfilAcesso | undefined,
+): boolean {
+  return !!perfilAcesso && SECTOR_WRITE_ROLES[setor].includes(perfilAcesso);
+}
