@@ -8,6 +8,7 @@ import { canViewAuditoria, canWriteReferences } from "@/lib/permissions";
 import { useContrato } from "./hooks";
 import { AuditoriaTab } from "./historico-auditoria/auditoria-tab";
 import { HistoricoTab } from "./historico-auditoria/historico-tab";
+import { ItensSection } from "./itens/itens-section";
 import { AmbientalTab } from "./setores/ambiental-tab";
 import { FinanceiroTab } from "./setores/financeiro-tab";
 import { LogisticaTab } from "./setores/logistica-tab";
@@ -148,6 +149,8 @@ export function ContratoDetailPage() {
           </dl>
         </CardContent>
       </Card>
+
+      <ItensSection contratoId={c.id} />
 
       <div>
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">Módulos setoriais e histórico</h2>

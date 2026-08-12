@@ -259,6 +259,7 @@ model Contrato {
   detalhesAmbiental    DetalhesAmbiental?
   detalhesLogistica    DetalhesLogistica?
   detalhesFinanceiro   DetalhesFinanceiro?
+  itens                ItemContrato[]
 
   @@unique([organizacaoId, numeroContrato])
   @@map("contratos")
@@ -453,4 +454,38 @@ model DetalhesFinanceiro {
   atualizadoEm                     DateTime @updatedAt @map("atualizado_em")
 
   @@map("detalhes_financeiro")
+}
+
+// ---------------------------------------------------------------------------
+// Itens de contrato (múltiplas linhas de especificação por contrato)
+// ---------------------------------------------------------------------------
+
+// Linhas de especificação dentro de UM contrato (Original ou Aditivo) — ex.:
+// várias combinações de espessura/largura/comprimento, cada uma com seu
+// próprio volume e preço por m³. Não é tabela de referência (sem CRUD de
+// listagem próprio, sem organizacaoId direto — RLS via EXISTS contra
+// "contratos", mesmo padrão de DetalhesProducao/Ambiental/Logística/
+// Financeiro acima). Todo campo numérico é Decimal, não Float — mesmo
+// cuidado de precisão já usado pra dinheiro (ver DetalhesFinanceiro):
+// espessura/largura/comprimento entram em cálculo de volume/preço.
+//
+// Contrato.volumeM3/valorTotalUsd NÃO mudam de comportamento — continuam
+// digitados manualmente, sem soma automática a partir destes itens (decisão
+// já tomada — ver README, seção "Itens de contrato").
+model ItemContrato {
+  id                String   @id @default(uuid())
+  contratoId        String   @map("contrato_id")
+  contrato          Contrato @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  espessuraMm       Decimal  @map("espessura_mm") @db.Decimal(8, 2)
+  larguraMm         Decimal  @map("largura_mm") @db.Decimal(8, 2)
+  // Validado em itens-contrato.routes.ts: comprimentoMaxMm >= comprimentoMinMm
+  // (podem ser iguais, pra comprimento fixo).
+  comprimentoMinMm  Decimal  @map("comprimento_min_mm") @db.Decimal(10, 2)
+  comprimentoMaxMm  Decimal  @map("comprimento_max_mm") @db.Decimal(10, 2)
+  volumeM3          Decimal  @map("volume_m3") @db.Decimal(12, 4)
+  precoPorM3Usd     Decimal  @map("preco_por_m3_usd") @db.Decimal(14, 2)
+  criadoEm          DateTime @default(now()) @map("criado_em")
+  atualizadoEm      DateTime @updatedAt @map("atualizado_em")
+
+  @@map("itens_contrato")
 }

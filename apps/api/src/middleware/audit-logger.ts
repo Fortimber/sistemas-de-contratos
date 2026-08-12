@@ -2,8 +2,10 @@ import { Prisma, AcaoAuditoria } from "@prisma/client";
 
 /**
  * Models auditados — mesmo escopo pedido na Fase 4 (contratos + os 4
- * módulos setoriais 1:1). Tabelas de referência (especies, produtos, ...)
- * ficam de fora de propósito.
+ * módulos setoriais 1:1), mais ItemContrato (itens de contrato — 1:N, não
+ * 1:1, mas mesmo tratamento: contratoIdFor já resolve pelo `contratoId` da
+ * linha, igual aos 4 setores). Tabelas de referência (especies, produtos,
+ * ..., eventos-pagamento) ficam de fora de propósito.
  */
 const AUDITED_MODELS = new Set([
   "Contrato",
@@ -11,6 +13,7 @@ const AUDITED_MODELS = new Set([
   "DetalhesAmbiental",
   "DetalhesLogistica",
   "DetalhesFinanceiro",
+  "ItemContrato",
 ]);
 
 /** Nome da propriedade do client Prisma pra cada model auditado. */
@@ -20,6 +23,7 @@ const MODEL_DELEGATE: Record<string, string> = {
   DetalhesAmbiental: "detalhesAmbiental",
   DetalhesLogistica: "detalhesLogistica",
   DetalhesFinanceiro: "detalhesFinanceiro",
+  ItemContrato: "itemContrato",
 };
 
 /** Campos técnicos que nunca contam como "campo alterado" pra fins de auditoria. */

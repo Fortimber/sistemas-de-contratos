@@ -816,6 +816,92 @@ restrito a `Administrador` (`403` pros demais) — proposta consciente: cada
 linha de auditoria expõe valor antes/depois campo a campo, incluindo dado
 financeiro, mais sensível que só "status mudou de X pra Y".
 
+## Itens de contrato
+
+Múltiplas linhas de especificação (espessura/largura/comprimento/volume/
+preço) dentro de UM contrato — ex.: várias combinações de dimensão, cada
+uma com seu próprio volume e preço por m³. Não é tabela de referência (sem
+CRUD de listagem próprio, sem `organizacaoId` direto) — mesmo padrão dos 4
+módulos setoriais, aninhado sob o contrato:
+
+```bash
+GET    /contratos/:contratoId/itens             # lista todos os itens do contrato
+POST   /contratos/:contratoId/itens             # { espessuraMm, larguraMm, comprimentoMinMm, comprimentoMaxMm, volumeM3, precoPorM3Usd }
+PATCH  /contratos/:contratoId/itens/:itemId      # body parcial
+DELETE /contratos/:contratoId/itens/:itemId
+```
+
+- Todo campo numérico é `Decimal` no banco, não `Float` — mesmo cuidado de
+  precisão já usado pra dinheiro (`espessuraMm`/`larguraMm`/
+  `comprimentoMinMm`/`comprimentoMaxMm`/`volumeM3`/`precoPorM3Usd` entram
+  em cálculo de volume/preço). Chegam na resposta da API como **string**
+  (mesma decisão de `DetalhesFinanceiro`/`Contrato.valorTotalUsd`).
+- Todo campo precisa ser `> 0` (`400` senão) e **`comprimentoMaxMm` >=
+  `comprimentoMinMm`** (podem ser iguais, pra comprimento fixo) — validado
+  tanto no `POST` quanto no `PATCH`; no `PATCH`, contra o valor **efetivo**
+  (mescla o que veio no body com o que já estava salvo, mesma ideia do
+  vínculo Original/Aditivo em `contratos.routes.ts`) — editar só
+  `comprimentoMaxMm` pra um valor menor que o `comprimentoMinMm` já salvo
+  também responde `400`, não só quando os dois vêm juntos.
+- Mesma checagem de `contratoId` (existe e pertence à sua organização antes
+  de qualquer operação — `404` claro, nunca `500`) e mesma defesa em
+  profundidade via RLS (policy `EXISTS` contra `contratos`) que os 4
+  módulos setoriais.
+- **Permissões**: leitura liberada a qualquer perfil autenticado. Escrita
+  restrita a `Administrador`+`Comercial` — mesmos perfis que já escrevem o
+  contrato em si (`contratos.routes.ts`), não os perfis operacionais dos
+  setores: item de contrato é parte da negociação comercial.
+- **Auditoria**: `ItemContrato` está em `AUDITED_MODELS`
+  (`middleware/audit-logger.ts`) — criação e edição de item geram linha em
+  `auditoria_contratos` automaticamente, sem nenhum código extra no módulo
+  de itens (mesmo mecanismo genérico dos 4 setores, só adicionando o nome
+  do model + o delegate do Prisma). `DELETE` não é auditado — a extension
+  não intercepta `delete`/`deleteMany` pra nenhum model hoje, mesma
+  situação de toda a API (nenhum outro módulo audita exclusão).
+- **`Contrato.volumeM3`/`valorTotalUsd` não mudam de comportamento** —
+  continuam digitados manualmente, decisão já tomada antes desta rodada.
+  Os itens são um detalhe complementar, **sem soma automática** pro volume/
+  valor do contrato.
+
+### Smoke test automatizado (Itens de contrato)
+
+`apps/api/scripts/smoke-test-itens-contrato.ts` reaproveita o setup de
+referências+contrato de `smoke-test-fixtures.ts`. Cobre: lista vazia antes
+de qualquer item, criação de 3 itens com dimensões diferentes (incluindo um
+com `comprimentoMinMm === comprimentoMaxMm`, comprimento fixo), listagem,
+edição de um item (valor efetivo pós-merge continua correto pro resto dos
+campos), `comprimentoMaxMm < comprimentoMinMm` no `POST` e no `PATCH`
+(`400` nos dois casos), remoção de um item, usuário `Operacional` (sem
+permissão — itens exige `Administrador`+`Comercial`, diferente dos
+setores) recebendo `200` no `GET` e `403` no `POST`, `404` em `GET`/`POST`
+com `contratoId` inexistente, e por fim confirma em
+`GET /contratos/:id/auditoria` que as 3 criações e a 1 edição de item
+aparecem na trilha de auditoria (contando linhas, não só checando "existe
+alguma", já que a criação do próprio contrato também gera uma linha com o
+mesmo formato). Limpa tudo no final, sucesso ou falha.
+
+```bash
+docker compose exec api npm run smoke:itens-contrato
+```
+
+Com tudo isso no ar, os 9 smoke tests (`fase1-cookie-auth`, `fase2`,
+`fase3-producao`, `fase3-ambiental`, `fase3-logistica`,
+`fase3-financeiro`, `fase4`, `eventos-pagamento`, `itens-contrato`) devem
+ser reconfirmados juntos sempre que houver mudança de schema ou nos
+módulos compartilhados:
+
+```bash
+docker compose exec api npm run smoke:fase1-cookie-auth && \
+docker compose exec api npm run smoke:fase2 && \
+docker compose exec api npm run smoke:fase3-producao && \
+docker compose exec api npm run smoke:fase3-ambiental && \
+docker compose exec api npm run smoke:fase3-logistica && \
+docker compose exec api npm run smoke:fase3-financeiro && \
+docker compose exec api npm run smoke:fase4 && \
+docker compose exec api npm run smoke:eventos-pagamento && \
+docker compose exec api npm run smoke:itens-contrato
+```
+
 ## Frontend (Fase 0 — fundação; Fase 1 — login; Fase 2 — referências e contratos; Fase 3 — módulos setoriais; Fase 4 — histórico e auditoria)
 
 ### Fase 0 — fundação técnica
@@ -1286,6 +1372,71 @@ Console do navegador sem erros em nenhuma das rodadas. Os 7 smoke tests
 `fase3-logistica`, `fase3-financeiro`, `fase4`) reconfirmados juntos depois
 da mudança, todos OK.
 
+### Itens de contrato
+
+Nova seção **"Especificações"** na tela de detalhe do contrato
+(`contrato-detail-page.tsx`) — logo abaixo do card "Requisitos" e ANTES da
+seção "Módulos setoriais e histórico" (não é uma aba dos 4 setores nem do
+histórico/auditoria, é uma listagem própria: `GET`/`POST`/`PATCH`/`DELETE`
+em `/contratos/:id/itens[/:itemId]`, sem `GET`/`PUT` único como os
+setores).
+
+**`src/features/contratos/itens/`** — tudo desta seção:
+
+- **`types.ts`**: `ItemContrato` (formato de `GET`, campos numéricos como
+  `string` — `Decimal` na API) e `ItemContratoPayload` (formato de envio,
+  campos como `number`).
+- **`hooks.ts`**: `useItensContrato` (lista, sem paginação — é uma listagem
+  pequena por contrato, não uma tabela de referência) e um par de
+  mutations por operação (`useCriarItemContrato`/`useEditarItemContrato`/
+  `useRemoverItemContrato`), todos invalidando a mesma `queryKey` no
+  sucesso.
+- **`itens-section.tsx`** (`ItensSection`): tabela + dialog de criar/editar
+  (mesmo espírito de `ReferenceCrudPage`, mas escrito à mão em vez de
+  reusar o componente genérico — o endpoint é aninhado sob o contrato, não
+  uma entidade de topo com rota própria na sidebar) + dialog de confirmação
+  de exclusão. Todo campo numérico vive no formulário como `string` (nunca
+  `number`), mesma decisão de precisão de `sector-form.tsx`/
+  `contrato-form.tsx` — a conversão só acontece uma vez, montando o
+  payload. Validação client-side (Zod `superRefine`) espelha a da API:
+  todo campo `> 0` e `comprimentoMaxMm >= comprimentoMinMm` — é só UX
+  (feedback mais rápido), a validação de verdade continua sendo o `400` do
+  backend. Comprimento é mostrado como faixa ("2000 – 3000 mm") ou valor
+  único ("2500 mm") quando `comprimentoMinMm === comprimentoMaxMm`.
+  Botões de adicionar/editar/remover só aparecem pra
+  `Administrador`+`Comercial` (`canWriteReferences`, mesma permissão de
+  escrita do contrato em si — reusada tal qual, não uma nova função).
+- **`somaVolume`**: soma de `volumeM3` de todos os itens, mostrada como
+  texto de apoio ("Soma dos itens: 12,50 m³ — não substitui o campo Volume
+  do contrato") — só ajuda visualmente quem está preenchendo a comparar
+  com o campo "Volume (m³)" do contrato; nunca escreve nesse campo nem
+  dispara nenhum `PATCH` em `/contratos/:id` (decisão explícita: itens não
+  substituem nem somam automaticamente pro volume/valor do contrato).
+
+**Verificado de ponta a ponta num navegador real (Chrome, via
+claude-in-chrome)**, como Administrador, num contrato real: adicionado um
+item (espessura/largura/comprimento/volume/preço) — apareceu na tabela e a
+soma de volume atualizou; adicionado um segundo item com
+`comprimentoMinMm === comprimentoMaxMm` — comprimento mostrado como valor
+único ("2500 mm"), não faixa; editado o primeiro item (volume e preço) —
+tabela e soma atualizaram, os demais campos do item continuaram intactos;
+removido o segundo item (com o dialog de confirmação) — tabela e soma
+voltaram a refletir só o item restante. Console do navegador sem erros em
+nenhum passo.
+
+**Achado de ambiente (não é bug do código)**: mesma flakiness de clique
+coordenado já documentada na Fase 3 (Radix `<Select>`) apareceu aqui em
+cliques sobre os campos do dialog de item — clique de mouse simulado
+ocasionalmente "vazava" pro backdrop do `Dialog` e fechava o formulário
+antes do preenchimento terminar. Contornado preenchendo os campos via
+`Tab` (navegação por teclado) em vez de clicar em cada campo — sempre
+confiável, mesmo padrão de correção já usado nos `<Select>` da Fase 3.
+Também houve uma perda momentânea de conexão do CDP (screenshot/read_page
+travando com timeout) no meio do teste, resolvida abrindo uma nova aba —
+a API e o Vite continuaram respondendo normalmente o tempo todo (conferido
+via `curl` direto), confirmando que era só a ferramenta de automação, não
+a aplicação.
+
 ## Estrutura
 
 ```
@@ -1296,12 +1447,14 @@ apps/api/
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
                    # representantes, status-contrato, eventos-pagamento, contratos,
                    # detalhes-producao, detalhes-ambiental, detalhes-logistica,
-                   # detalhes-financeiro, historico-status-contrato, auditoria-contratos)
+                   # detalhes-financeiro, historico-status-contrato, auditoria-contratos,
+                   # itens-contrato)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
   scripts/        # smoke tests por fase (smoke-test-fase1-cookie-auth.ts, smoke-test-fase2.ts,
                    # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
                    # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
-                   # smoke-test-fase4.ts, smoke-test-eventos-pagamento.ts)
+                   # smoke-test-fase4.ts, smoke-test-eventos-pagamento.ts,
+                   # smoke-test-itens-contrato.ts)
 apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção "Frontend" acima
   src/
     components/
@@ -1325,6 +1478,10 @@ apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção 
                      # hooks.ts (GET paginado por aba, "alterado por" já populado pela API),
                      # historico-tab.tsx, auditoria-tab.tsx (só monta se canViewAuditoria — aba
                      # ausente pra quem não é Admin)
+        itens/       # seção "Especificações" da tela de detalhe (múltiplas linhas de item por
+                     # contrato): types.ts, hooks.ts (GET lista + POST/PATCH/DELETE),
+                     # itens-section.tsx (tabela + dialogs de criar/editar/remover, soma de
+                     # volume só informativa)
     lib/          # api-client (fetch central + refreshSession deduplicado), auth-context
                    # (AuthProvider/useAuth), permissions (canWriteReferences, canWriteSector,
                    # canWriteEventosPagamento, canViewAuditoria), pagination (types

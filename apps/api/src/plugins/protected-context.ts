@@ -16,6 +16,7 @@ import { detalhesLogisticaRoutes } from "../modules/detalhes-logistica/detalhes-
 import { detalhesFinanceiroRoutes } from "../modules/detalhes-financeiro/detalhes-financeiro.routes.js";
 import { historicoStatusContratoRoutes } from "../modules/historico-status-contrato/historico-status-contrato.routes.js";
 import { auditoriaContratosRoutes } from "../modules/auditoria-contratos/auditoria-contratos.routes.js";
+import { itensContratoRoutes } from "../modules/itens-contrato/itens-contrato.routes.js";
 
 /**
  * Contexto protegido: autenticação + tenant-scoping registrados uma única
@@ -56,4 +57,8 @@ export async function protectedContext(app: FastifyInstance) {
   // via PATCH /contratos/:id e via middleware/audit-logger.ts).
   await app.register(historicoStatusContratoRoutes);
   await app.register(auditoriaContratosRoutes);
+
+  // Itens de contrato (múltiplas linhas de especificação) — adicionado
+  // depois da Fase 4.
+  await app.register(itensContratoRoutes);
 }

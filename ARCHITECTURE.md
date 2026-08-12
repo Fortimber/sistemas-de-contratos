@@ -136,6 +136,7 @@ negócio.
 | Ambiental | (revisar na prática, tela por tela — nenhuma pendência registrada até aqui) | ✅ A confirmar |
 | Produção | (revisar na prática, tela por tela — nenhuma pendência registrada até aqui) | ✅ A confirmar |
 | Contratos | (revisar na prática, tela por tela — nenhuma pendência registrada até aqui) | ✅ A confirmar |
+| Contratos | Itens de contrato — múltiplas linhas de especificação (espessura/largura/comprimento/volume/preço por m³) dentro de um contrato, sem soma automática pro volume/valor do contrato | ✅ Resolvido — implementado (backend `itens-contrato.routes.ts` + tabela `itens_contrato`, frontend seção "Especificações" na tela de detalhe, ver README) |
 
 ## 11. Prompt inicial sugerido para o Claude Code
 
