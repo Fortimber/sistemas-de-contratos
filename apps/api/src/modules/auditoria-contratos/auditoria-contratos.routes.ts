@@ -15,6 +15,14 @@ import { requireRole } from "../../middleware/roles.js";
  * granular/sensível que historico-status, que é aberto a todos): cada linha
  * expõe o valor antes/depois campo a campo, incluindo dado financeiro.
  *
+ * `include: { usuario: {...} } }` popula quem fez a alteração — mesmo padrão
+ * de `RELATION_INCLUDE` em contratos.service.ts, e mesmo motivo/mesma
+ * correção de gap real aplicada em historico-status-contrato.routes.ts (ver
+ * comentário lá): sem isso o frontend só tinha o id cru, sem jeito de
+ * resolver pra nome. `select` limitado a `{ id, nomeCompleto }`.
+ * `usuarioId` é opcional no schema — nulo (ou apontando pra usuário já
+ * excluído, FK com `ON DELETE SET NULL`) vira `usuario: null` sozinho.
+ *
  * Registrada dentro do contexto protegido (plugins/protected-context.ts).
  */
 export async function auditoriaContratosRoutes(app: FastifyInstance) {
@@ -35,6 +43,9 @@ export async function auditoriaContratosRoutes(app: FastifyInstance) {
           skip,
           take,
           orderBy: { dataHora: "desc" },
+          include: {
+            usuario: { select: { id: true, nomeCompleto: true } },
+          },
         }),
         request.db.auditoriaContrato.count({ where: { contratoId } }),
       ]);

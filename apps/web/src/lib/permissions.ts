@@ -45,3 +45,18 @@ export function canWriteSector(
 ): boolean {
   return !!perfilAcesso && SECTOR_WRITE_ROLES[setor].includes(perfilAcesso);
 }
+
+/**
+ * Leitura da aba "Auditoria" (tela de detalhe do contrato, Fase 4 do
+ * frontend) — espelha exatamente `requireRole("Administrador")` em
+ * `apps/api/src/modules/auditoria-contratos/auditoria-contratos.routes.ts`.
+ * Diferente das funções acima: aqui é permissão de LEITURA, não escrita —
+ * a própria aba não deve aparecer pra quem não é Administrador (não é só
+ * esconder o conteúdo), porque não faz sentido de UX mostrar uma aba cujo
+ * `GET` sempre responde `403`. `historico-status` (aba "Histórico") não
+ * tem checagem equivalente — leitura é liberada a qualquer perfil
+ * autenticado, igual ao resto do sistema.
+ */
+export function canViewAuditoria(perfilAcesso: PerfilAcesso | undefined): boolean {
+  return perfilAcesso === "Administrador";
+}

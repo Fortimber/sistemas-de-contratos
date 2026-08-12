@@ -1,6 +1,6 @@
 # Sistema de Contratos de Exportação
 
-Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica), Fase 1 (login + proteção de rotas), Fase 2 (telas de referências + contratos) e Fase 3 (abas dos módulos setoriais na tela de detalhe do contrato) prontas, ver seção "Frontend" abaixo. Próxima: Fase 4 do frontend.
+Ver `ARCHITECTURE.md` para o blueprint completo. Estado atual — **backend**: Fase 1 (auth por cookie httpOnly), Fase 2, Fase 3 (módulos setoriais completa) e Fase 4 (auditoria/histórico) prontos. **Frontend**: Fase 0 (fundação técnica), Fase 1 (login + proteção de rotas), Fase 2 (telas de referências + contratos), Fase 3 (abas dos módulos setoriais) e Fase 4 (abas de histórico e auditoria) prontas — fecha o roadmap principal do frontend (F0–F4), ver seção "Frontend" abaixo. Próxima: telas de Anexos, que dependem da Fase 5 do backend (ainda não iniciada).
 
 ## Rodando localmente (Docker)
 
@@ -672,7 +672,38 @@ docker compose exec api npm run smoke:fase3-financeiro && \
 docker compose exec api npm run smoke:fase4
 ```
 
-## Frontend (Fase 0 — fundação; Fase 1 — login; Fase 2 — referências e contratos; Fase 3 — módulos setoriais)
+## Histórico e auditoria (Fase 4)
+
+```bash
+GET /contratos/:contratoId/historico-status   # paginado, mais recente primeiro
+GET /contratos/:contratoId/auditoria          # paginado, mais recente primeiro — só Administrador
+```
+
+`historico-status` é gravado pelo `PATCH /contratos/:id` toda vez que
+`statusId` muda (ver `contratos.routes.ts`); `auditoria` é gravado
+automaticamente por `middleware/audit-logger.ts` (Prisma Client Extension)
+em toda escrita de `contratos`/`detalhes_producao`/`detalhes_ambiental`/
+`detalhes_logistica`/`detalhes_financeiro` — nenhuma das duas rotas grava
+nada, só leem. `contratoId` na URL precisa existir e pertencer à sua
+organização (`404` claro, senão), mesma checagem dos módulos setoriais.
+
+Cada linha inclui o usuário relacionado já populado
+(`alteradoPor`/`usuario`, `{ id, nomeCompleto }`), não só o id cru
+(`alteradoPorId`/`usuarioId`) — **correção de um gap real**: antes disso a
+API só devolvia o id, e como não existe (e não está previsto) um endpoint
+de listagem de usuários, não havia como o frontend resolver "quem alterou"
+pra um usuário qualquer, só reconhecer o próprio usuário logado no
+momento. `null` quando a linha não tem usuário associado, ou quando o
+usuário foi excluído depois (a FK usa `ON DELETE SET NULL`, não bloqueia
+o `DELETE` do usuário) — testado na prática, ver "Verificado" na seção
+Fase 4 do Frontend abaixo.
+
+`historico-status` é liberado a qualquer perfil autenticado; `auditoria` é
+restrito a `Administrador` (`403` pros demais) — proposta consciente: cada
+linha de auditoria expõe valor antes/depois campo a campo, incluindo dado
+financeiro, mais sensível que só "status mudou de X pra Y".
+
+## Frontend (Fase 0 — fundação; Fase 1 — login; Fase 2 — referências e contratos; Fase 3 — módulos setoriais; Fase 4 — histórico e auditoria)
 
 ### Fase 0 — fundação técnica
 
@@ -981,6 +1012,113 @@ componente: a mesma seleção via teclado (setas + Enter, que dispara o
 mesmo `onValueChange`) e cliques repetidos sempre funcionaram, e o valor
 salvo no banco sempre bateu com o que a tela mostrava no momento do envio.
 
+### Fase 4 — histórico e auditoria
+
+Duas novas abas na mesma seção "Módulos setoriais e histórico" da tela de
+detalhe do contrato (`contrato-detail-page.tsx`), junto das 4 da Fase 3:
+**Histórico** (mudanças de status) e **Auditoria** (trilha campo a campo).
+Nenhuma das duas tem formulário — são só listagens paginadas de leitura,
+mais recente primeiro (a API já ordena por `dataAlteracao`/`dataHora
+desc`).
+
+**`src/features/contratos/historico-auditoria/`** — tudo desta fase:
+
+- **`types.ts`**: `HistoricoStatusContrato`/`AuditoriaContrato`, espelhando
+  o formato de `GET .../historico-status` e `GET .../auditoria` (ver
+  `apps/api/src/modules/{historico-status-contrato,auditoria-contratos}/
+  *.routes.ts`, e a seção "Histórico e auditoria (Fase 4)" mais acima).
+  `alteradoPorId`/`usuarioId` continuam presentes (o id cru), mas agora
+  vêm acompanhados de `alteradoPor`/`usuario` (`UsuarioResumo | null` —
+  `{ id, nomeCompleto }`), já que a API popula essa relação. `statusAnteriorId`/
+  `statusNovoId` continuam só id — resolvidos pro nome no frontend (ver
+  `historico-tab.tsx` abaixo), porque `/status-contrato` é uma tabela
+  listável, ao contrário de usuários. `AcaoAuditoria` documenta um detalhe
+  não óbvio: o valor runtime do client Prisma pro enum é a CHAVE do schema
+  (`"Criacao"`), não o `@map` em português usado só na coluna do Postgres —
+  conferido em `apps/api/scripts/smoke-test-fase4.ts`, que filtra por
+  `acao: "Criacao"`.
+- **`hooks.ts`**: `useHistoricoStatus`/`useAuditoria`, par simples de
+  `useQuery` paginado (mesmo formato `{ data, meta }` de toda listagem da
+  API — `Paginated<T>`, `lib/pagination.ts`). `useAuditoria` não precisa
+  se preocupar com o `403` que a API devolve pra quem não é
+  Administrador: só é chamado por dentro de `AuditoriaTab`, que só monta
+  quando a permissão já foi conferida um nível acima (ver abaixo).
+- **`historico-tab.tsx`** (`HistoricoTab`): tabela com data, status
+  anterior, status novo, alterado por, observação. `statusAnteriorId`/
+  `statusNovoId` resolvidos pro nome via o mesmo lookup id → nome já
+  usado em `contratos-list-page.tsx` (busca `/status-contrato` uma vez,
+  monta um `Map`) — já "alterado por" usa `h.alteradoPor?.nomeCompleto ??
+  "—"` direto, sem lookup nenhum no frontend (a API já resolve). Sem
+  checagem de permissão — visível a qualquer perfil autenticado, igual ao
+  resto das rotas de leitura do sistema.
+- **`auditoria-tab.tsx`** (`AuditoriaTab`): tabela com data, ação
+  (`Criação`/`Edição`/`Exclusão` — label em português só na UI, o valor
+  cru continua sendo a chave do enum), campo alterado, valor anterior,
+  valor novo, alterado por (`a.usuario?.nomeCompleto ?? "—"`, mesmo
+  padrão). Não tem fallback de "sem permissão" dentro do componente de
+  propósito: se chegou a montar, a permissão já foi conferida (ver
+  próximo parágrafo).
+
+**Achado real corrigido nesta rodada**: a primeira versão deste módulo
+tinha `nome-usuario.ts`, um helper que só conseguia resolver "quem
+alterou" pro próprio usuário logado (`useAuth().user`), caindo pro id cru
+pra qualquer outro usuário — porque as rotas da API só devolviam
+`alteradoPorId`/`usuarioId`, sem nome, e não existe endpoint de listagem
+de usuários pro frontend resolver isso por conta própria. Ou seja: um
+Administrador olhando a auditoria de uma mudança feita por OUTRA pessoa
+via um UUID sem sentido, não o nome dela — o cenário de uso real e mais
+comum da tela. Corrigido no backend (`include: { alteradoPor: {...} } }`/
+`include: { usuario: {...} } }` nas duas rotas, populando `{ id,
+nomeCompleto }` — ver seção "Histórico e auditoria (Fase 4)" acima), não
+no frontend: o frontend só passou a ler o campo já populado.
+`nome-usuario.ts` foi removido (sem mais uso).
+
+**Aba "Auditoria" ausente, não só bloqueada, pra quem não é
+Administrador** (`src/lib/permissions.ts`, `canViewAuditoria` — espelha
+exatamente `requireRole("Administrador")` em
+`auditoria-contratos.routes.ts`): `contrato-detail-page.tsx` só renderiza
+o `TabsTrigger` E o `TabsContent` da aba quando `canViewAuditoria` dá
+`true`. Diferente de `canWriteSector`/`canWriteReferences` (que escondem
+só o formulário, mantendo a aba/tela visível em modo leitura), aqui a aba
+inteira não existe no DOM pra outros perfis — não faz sentido de UX
+mostrar uma aba cujo `GET` sempre responde `403`. Confirmado que isso não
+é só CSS escondendo o conteúdo: nenhuma requisição a `.../auditoria`
+chega a ser disparada pra um perfil sem permissão (o componente
+`AuditoriaTab` nunca monta, então o hook `useAuditoria` nunca roda).
+
+**Verificado de ponta a ponta num navegador real (Chrome, via
+claude-in-chrome)**, como Administrador:
+
+- Editado um campo em Produção (`observacoesProducao`) → nova linha
+  apareceu no topo da aba Auditoria (mais recente primeiro), com o campo,
+  valor anterior/novo e "Administrador" em "Alterado por" corretos.
+- Mudado o status do contrato (via `PATCH /contratos/:id`, tela de
+  edição) → nova linha apareceu na aba Histórico com status
+  anterior/novo resolvidos pro nome certo e "Administrador" em "Alterado
+  por".
+- Confirmado com um usuário de teste de perfil único (`Comercial`,
+  criado via SQL direto só pra este teste e removido ao final): a aba
+  Auditoria não apareceu na lista de abas (só Produção/Ambiental/
+  Logística/Financeiro/Histórico, 5 abas em vez de 6) — nem no DOM, nem
+  disparando requisição.
+- **O cenário que estava quebrado, reconfirmado depois da correção**:
+  criado um segundo usuário de teste (`teste-operacional`, perfil
+  `Operacional`, via SQL direto), editado um campo em Produção logado
+  como ELE, depois trocado a sessão de volta pro Administrador — a linha
+  correspondente na aba Auditoria mostrou **"Usuario Teste Operacional"**
+  em "Alterado por", não o UUID nem "—". Ambos os usuários de teste
+  removidos ao final.
+- Reconfirmado também via chamada direta à API (`curl`, sem passar pelo
+  frontend) que `alteradoPor`/`usuario` vêm como `null` — não quebram,
+  não lançam erro — na linha de auditoria de um usuário que foi excluído
+  depois de fazer a mudança (mesmo cenário do achado da rodada anterior,
+  reconfirmado após a mudança na query).
+
+Console do navegador sem erros em nenhuma das rodadas. Os 7 smoke tests
+(`fase1-cookie-auth`, `fase2`, `fase3-producao`, `fase3-ambiental`,
+`fase3-logistica`, `fase3-financeiro`, `fase4`) reconfirmados juntos depois
+da mudança, todos OK.
+
 ## Estrutura
 
 ```
@@ -997,13 +1135,13 @@ apps/api/
                    # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
                    # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
                    # smoke-test-fase4.ts)
-apps/web/          # React + Vite — Fases 0, 1, 2 e 3 prontas, ver seção "Frontend" acima
+apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção "Frontend" acima
   src/
     components/
       layout/     # AppLayout, Sidebar (navegação + logout)
       ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form, checkbox, tabs)
       full-page-loading.tsx  # estado de carregamento (boot da sessão)
-      pagination-controls.tsx # Anterior/Próxima — reusado por referências e contratos
+      pagination-controls.tsx # Anterior/Próxima — reusado por referências, contratos e histórico/auditoria
     features/
       referencias/  # especies/produtos/importadores/representantes/status-contrato-page.tsx
                      # (config sobre reference-crud-page.tsx, o CRUD genérico), hooks.ts, types.ts
@@ -1013,9 +1151,14 @@ apps/web/          # React + Vite — Fases 0, 1, 2 e 3 prontas, ver seção "Fr
                      # field-config.ts (schema declarativo dos campos por setor), sector-form.tsx
                      # (formulário genérico), sector-read-only.tsx, sector-tab.tsx (casca comum),
                      # hooks.ts (GET+PUT por setor), producao/ambiental/logistica/financeiro-tab.tsx
+        historico-auditoria/  # abas Histórico/Auditoria da tela de detalhe (Fase 4): types.ts,
+                     # hooks.ts (GET paginado por aba, "alterado por" já populado pela API),
+                     # historico-tab.tsx, auditoria-tab.tsx (só monta se canViewAuditoria — aba
+                     # ausente pra quem não é Admin)
     lib/          # api-client (fetch central + refreshSession deduplicado), auth-context
-                   # (AuthProvider/useAuth), permissions (canWriteReferences, canWriteSector),
-                   # pagination (types Paginated/PaginationMeta), query-client (TanStack Query), utils (cn)
+                   # (AuthProvider/useAuth), permissions (canWriteReferences, canWriteSector,
+                   # canViewAuditoria), pagination (types Paginated/PaginationMeta),
+                   # query-client (TanStack Query), utils (cn)
     pages/        # login-page.tsx
     routes/       # route-guards (ProtectedRoute, PublicOnlyRoute)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)

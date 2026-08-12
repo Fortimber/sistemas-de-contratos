@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/lib/auth-context";
-import { canWriteReferences } from "@/lib/permissions";
+import { canViewAuditoria, canWriteReferences } from "@/lib/permissions";
 import { useContrato } from "./hooks";
+import { AuditoriaTab } from "./historico-auditoria/auditoria-tab";
+import { HistoricoTab } from "./historico-auditoria/historico-tab";
 import { AmbientalTab } from "./setores/ambiental-tab";
 import { FinanceiroTab } from "./setores/financeiro-tab";
 import { LogisticaTab } from "./setores/logistica-tab";
@@ -56,6 +58,7 @@ export function ContratoDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
   const canWrite = canWriteReferences(user?.perfilAcesso);
+  const canSeeAuditoria = canViewAuditoria(user?.perfilAcesso);
   const contratoQuery = useContrato(id);
 
   if (contratoQuery.isLoading) {
@@ -135,13 +138,17 @@ export function ContratoDetailPage() {
       </Card>
 
       <div>
-        <h2 className="mb-2 text-sm font-medium text-muted-foreground">Módulos setoriais</h2>
+        <h2 className="mb-2 text-sm font-medium text-muted-foreground">Módulos setoriais e histórico</h2>
         <Tabs defaultValue="producao">
           <TabsList>
             <TabsTrigger value="producao">Produção</TabsTrigger>
             <TabsTrigger value="ambiental">Ambiental</TabsTrigger>
             <TabsTrigger value="logistica">Logística</TabsTrigger>
             <TabsTrigger value="financeiro">Financeiro</TabsTrigger>
+            <TabsTrigger value="historico">Histórico</TabsTrigger>
+            {/* Aba "Auditoria" nem existe no DOM pra quem não é Administrador — não
+                é só conteúdo escondido, ver canViewAuditoria em lib/permissions.ts. */}
+            {canSeeAuditoria && <TabsTrigger value="auditoria">Auditoria</TabsTrigger>}
           </TabsList>
           <TabsContent value="producao">
             <ProducaoTab contratoId={c.id} />
@@ -155,6 +162,14 @@ export function ContratoDetailPage() {
           <TabsContent value="financeiro">
             <FinanceiroTab contratoId={c.id} />
           </TabsContent>
+          <TabsContent value="historico">
+            <HistoricoTab contratoId={c.id} />
+          </TabsContent>
+          {canSeeAuditoria && (
+            <TabsContent value="auditoria">
+              <AuditoriaTab contratoId={c.id} />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>
