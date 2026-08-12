@@ -15,6 +15,16 @@
  *
  * Reusável como teste de regressão: para no primeiro FAIL, mas a limpeza
  * roda sempre (sucesso ou falha) — nenhum estado de teste fica no banco.
+ *
+ * Passos 21-22 cobrem um bug real de produção: `comissaoPct` sem validação
+ * de faixa deixava um valor absurdo (5000) chegar direto no Postgres e
+ * estourar `Decimal(5,2)` com erro cru vazando na resposta (mensagem,
+ * caminho de arquivo do servidor, tudo). Corrigido em duas frentes — ver
+ * `contratos.routes.ts` (faixa 0-100 no JSON Schema) e `server.ts`
+ * (`setErrorHandler`/`setSchemaErrorFormatter` globais, nunca mais um erro
+ * não tratado vaza detalhe interno pra nenhuma rota). Passo 22 usa
+ * `comissaoMetragem` (que NÃO ganhou faixa nova) de propósito, pra provar
+ * que a correção é genérica, não um remendo só pra `comissaoPct`.
  */
 import "dotenv/config";
 import bcrypt from "bcrypt";
@@ -420,6 +430,65 @@ async function main() {
         assert(
           kilnDriedRow!.valorAnterior === "true" && kilnDriedRow!.valorNovo === "false",
           `auditoria de requerCertificadoKilnDried não bateu (anterior="${kilnDriedRow!.valorAnterior}", novo="${kilnDriedRow!.valorNovo}")`,
+        );
+      },
+    },
+    {
+      name: "21) Bug real: comissaoPct fora da faixa (5000) -> 400 com mensagem clara, não mais o overflow cru do Postgres",
+      run: async () => {
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            numeroContrato: `${numeroContrato}-COMISSAO-INVALIDA`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+            comissaoPct: 5000,
+          },
+        });
+        assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
+        assert(
+          /comissaoPct/.test(String(json?.message)),
+          `mensagem deveria citar comissaoPct (veio "${json?.message}")`,
+        );
+        assert(
+          !/Postgres|ConnectorError|numeric field overflow|PrismaClient/i.test(String(json?.message)),
+          `mensagem não deveria vazar erro cru do Postgres/Prisma (veio "${json?.message}")`,
+        );
+      },
+    },
+    {
+      name: "22) Erro de banco NÃO previsto explicitamente (comissaoMetragem estourando Decimal(12,2)) -> 500 genérico, sem vazar detalhe interno",
+      run: async () => {
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            numeroContrato: `${numeroContrato}-METRAGEM-OVERFLOW`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+            // comissaoMetragem não tem "maximum" no schema (diferente de
+            // comissaoPct, que ganhou faixa 0-100 nesta rodada) — de
+            // propósito, pra provar que o error handler GLOBAL intercepta
+            // qualquer overflow de Decimal não antecipado, não só o campo
+            // que motivou o bug original.
+            comissaoMetragem: 999999999999,
+          },
+        });
+        assert(status === 500, `esperado 500, veio ${status}: ${JSON.stringify(json)}`);
+        assert(
+          json?.message === "Erro interno, tente novamente ou contate o suporte.",
+          `esperada a mensagem genérica de 500, veio "${json?.message}"`,
+        );
+        assert(
+          !/Postgres|ConnectorError|numeric field overflow|contratos\.routes\.ts|PrismaClient|\.ts:\d/i.test(
+            JSON.stringify(json),
+          ),
+          `resposta vazou detalhe interno do servidor: ${JSON.stringify(json)}`,
         );
       },
     },

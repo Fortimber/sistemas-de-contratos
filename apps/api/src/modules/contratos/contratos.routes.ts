@@ -34,7 +34,12 @@ const contratoFields = {
   requerCertificadoKilnDried: { type: "boolean" },
   // Decimal no banco (ver schema.prisma) — mesma decisão de precisão
   // monetária da Fase 3/Financeiro, aplicada aqui de forma consistente.
-  comissaoPct: { type: "number", minimum: 0 },
+  // comissaoPct é percentual — maximum:100 além do minimum:0 (achado real:
+  // sem isso um valor como 5000 passava direto pro Postgres e estourava
+  // Decimal(5,2) com erro bruto de overflow, ver server.ts/setErrorHandler
+  // e lib/prisma-errors.ts pra defesa em profundidade contra esse tipo de
+  // erro pra QUALQUER campo, não só este).
+  comissaoPct: { type: "number", minimum: 0, maximum: 100 },
   comissaoMetragem: { type: "number", minimum: 0 },
   valorTotalUsd: { type: "number", minimum: 0 },
   moedaValorTotal: { type: "string", minLength: 1 },

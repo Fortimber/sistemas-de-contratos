@@ -376,7 +376,7 @@ os opcionais indicados):
   "requerFsc": false,                 // opcional, default false
   "requerCertificadoFitossanitario": false, // opcional, default false
   "requerCertificadoKilnDried": false,      // opcional, default false — "Certificate of Kiln Dried Timber"
-  "comissaoPct": 2.5,                 // opcional
+  "comissaoPct": 2.5,                 // opcional, 0-100 (percentual — ver "Tratamento de erros" abaixo)
   "comissaoMetragem": 10,             // opcional
   "valorTotalUsd": 45000,
   "moedaValorTotal": "USD",
@@ -433,7 +433,7 @@ dois, adicionada nesta rodada (`contratos.service.ts`,
 
 ### Smoke test automatizado (Fase 2)
 
-`apps/api/scripts/smoke-test-fase2.ts` roda os 20 cenários acima (criação
+`apps/api/scripts/smoke-test-fase2.ts` roda os 22 cenários acima (criação
 das referências, contrato, listagem, filtro, edição, número duplicado,
 exclusão de referência em uso, usuário `Operacional` sem permissão de
 escrita, isolamento cruzado entre organizações, o vínculo Original/
@@ -442,13 +442,17 @@ de um Original válido `201`, Aditivo apontando pra outro Aditivo `400`
 com mensagem de encadeamento, Aditivo com `contratoPaiId` de contrato de
 outra organização `400`/`404` nunca `500`, Original com `contratoPaiId`
 preenchido `400`, e os dois `GET` confirmando `contratoPai`/`aditivos`
-populados —, e os dois certificados booleanos mais recentes
+populados —, os dois certificados booleanos
 (`requerCertificadoFitossanitario`/`requerCertificadoKilnDried`):
 criação com os dois marcados, edição desmarcando os dois, e confirmação
 de que as duas mudanças aparecem em `auditoria_contratos` automaticamente
 via `middleware/audit-logger.ts` — sem nenhum código novo nesse
 middleware, prova de que a extension captura qualquer campo por conta
-própria) via HTTP de verdade contra a API já no ar, imprime `PASS`/
+própria — e os dois cenários mais recentes de tratamento de erro (ver
+seção "Tratamento de erros" abaixo): `comissaoPct` fora de faixa `400`
+com mensagem clara, e um overflow de `Decimal` não antecipado
+explicitamente (`comissaoMetragem`) confirmando o `500` genérico sem
+vazamento) via HTTP de verdade contra a API já no ar, imprime `PASS`/
 `FAIL` por passo, para no primeiro `FAIL`, e sempre limpa todo o dado de
 teste no final (sucesso ou falha) — não deixa lixo no banco. Reusar como
 regressão sempre que mexer em auth, tenant-scoping, RLS ou nesses
@@ -901,6 +905,76 @@ docker compose exec api npm run smoke:fase4 && \
 docker compose exec api npm run smoke:eventos-pagamento && \
 docker compose exec api npm run smoke:itens-contrato
 ```
+
+## Tratamento de erros
+
+**Bug real de produção, corrigido nesta rodada**: `comissaoPct`
+(`Decimal(5,2)` — teto absoluto de `999.99`) não tinha validação de faixa
+na API. Um valor como `5000` (digitado por engano em vez de `50`, ou já
+mal-formatado por algum client) passava direto pro `POST`/`PATCH
+/contratos`, chegava intacto no Postgres e estourava
+`numeric field overflow` — e como a API não tinha **nenhum**
+`setErrorHandler` registrado, o Fastify caía no handler padrão dele, que
+serializa `error.message` sem filtrar. A resposta `500` que o cliente
+recebia incluía a mensagem de erro do Prisma **inteira**: stack de query,
+caminho de arquivo do servidor, o `ConnectorError` do driver com o
+SQLSTATE cru do Postgres — tudo isso aparecia bruto na tela do frontend.
+
+Corrigido em duas frentes, uma específica e uma geral (a geral é a que
+efetivamente fecha a classe inteira do problema, não só este campo):
+
+1. **`comissaoPct` ganhou faixa no JSON Schema** (`contratos.routes.ts`,
+   `contratoFields` — compartilhado entre `POST` e `PATCH`, um edit só
+   corrige os dois): `minimum: 0, maximum: 100` — é percentual, não faz
+   sentido negativo nem acima de 100.
+2. **Error handling global, novo em `server.ts`** — não existia
+   nenhum antes desta rodada:
+   - `app.setSchemaErrorFormatter(...)`: erro de validação de schema
+     (Ajv) agora vira mensagem em **português**, específica por campo
+     (`minimum`/`maximum`/`exclusiveMinimum`/`required`/`type`/`enum`/
+     `minLength`/`additionalProperties`/`format`, com fallback genérico
+     pra qualquer keyword não coberta) — antes disso a API devolvia a
+     mensagem padrão do Ajv em inglês (`"body/comissaoPct must be <= 100"`).
+   - `app.setErrorHandler(...)`: intercepta **qualquer** erro que chegue
+     até aqui sem ter sido tratado explicitamente numa rota (`try/catch` +
+     `reply.code(...).send(...)`, o padrão já usado em toda a API pra
+     `P2002`/`P2003`/etc.). Erro de validação de schema (já em português,
+     sempre erro do cliente) é a única categoria com mensagem específica
+     repassada — qualquer outra coisa (erro conhecido do Prisma sem
+     tratamento explícito na rota, erro cru do Postgres sem mapeamento —
+     caso do overflow —, ou qualquer exceção JS não prevista) vira **sempre
+     o mesmo `500`** com `{ "message": "Erro interno, tente novamente ou
+     contate o suporte." }`. O erro real completo (mensagem, stack,
+     detalhe) vai pro log do servidor (`request.log.error`, Pino — nunca
+     pro corpo da resposta).
+   - `lib/prisma-errors.ts` ganhou `isPostgresDataError` — reconhece
+     quando o erro é um `PrismaClientUnknownRequestError` cujo SQLSTATE
+     cru (embutido só como texto na mensagem, ex.: `code: "22003"` =
+     `numeric field overflow`, classe `22` = "data exception" do Postgres)
+     indica erro de dado, não de servidor. Não muda a resposta que sai pro
+     cliente (que já é o `500` genérico de qualquer forma) — só marca o
+     log do servidor de forma diferenciada, útil pra diagnóstico depois.
+
+**Por que a correção geral importa mais que a específica**: `comissaoPct`
+era só o campo que o teste manual encontrou primeiro. Outros campos
+`Decimal` sem `maximum` no schema (ex.: `comissaoMetragem`) tinham
+exatamente a mesma vulnerabilidade — e qualquer erro futuro de banco não
+antecipado (constraint nova, tipo de dado errado, o que for) teria o
+mesmo problema de vazamento. O `setErrorHandler` global fecha a classe
+inteira do problema de uma vez, não só este campo — testado explicitamente
+com `comissaoMetragem` (que **não** ganhou `maximum` novo) pra provar
+isso, ver passo 22 do smoke test abaixo.
+
+Testado reproduzindo o cenário exato do bug (`comissaoPct: 5000` via
+`curl` direto contra a API) antes e depois da correção — antes, `500` com
+a mensagem crua do Prisma/Postgres completa; depois, `400` com
+`{ "message": "O campo \"comissaoPct\" precisa ser menor ou igual a
+100." }`. Também forçado um segundo tipo de erro de banco não previsto
+explicitamente em nenhuma rota (`comissaoMetragem: 999999999999`,
+estourando `Decimal(12,2)`) — confirmado `500` genérico, sem nenhum
+vestígio de `Postgres`/`ConnectorError`/caminho de arquivo na resposta.
+Ambos os cenários viraram os passos 21 e 22 de
+`smoke-test-fase2.ts` (ver acima).
 
 ## Frontend (Fase 0 — fundação; Fase 1 — login; Fase 2 — referências e contratos; Fase 3 — módulos setoriais; Fase 4 — histórico e auditoria)
 
