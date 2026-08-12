@@ -16,6 +16,12 @@ function formatValue(f: SectorFieldConfig, raw: unknown): ReactNode {
   if (f.kind === "date" && typeof raw === "string") {
     return new Date(raw).toLocaleDateString("pt-BR", { timeZone: "UTC" });
   }
+  // select-entity guarda id em `raw` (o campo é a FK, ex.:
+  // prazoPagamentoEventoId) — mostra o nome, não o id cru, via lookup nas
+  // mesmas opções que alimentam o <Select> do formulário.
+  if (f.kind === "select-entity") {
+    return f.options.find((opt) => opt.value === raw)?.label ?? String(raw);
+  }
   // number (inclui os campos monetários, Decimal-como-string da API) e
   // select/text: mostrar o valor bruto, sem reformatar — mesmo cuidado de
   // precisão do formulário (ver sector-form.tsx).

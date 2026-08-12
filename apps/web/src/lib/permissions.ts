@@ -47,6 +47,20 @@ export function canWriteSector(
 }
 
 /**
+ * Permissão de escrita da tela de referência "Eventos de pagamento"
+ * (`src/features/referencias/eventos-pagamento-page.tsx`) — espelha
+ * `requireRole("Administrador", "Financeiro")` em
+ * `eventos-pagamento.routes.ts` na API. Diferente de `canWriteReferences`
+ * (Administrador+Comercial, usada pelas outras 5 tabelas de referência):
+ * evento de pagamento é conceito do setor Financeiro, mesmos perfis de
+ * `canWriteSector("financeiro", ...)`. Passada como `canWrite` na
+ * `ReferenceCrudConfig` dessa tela (ver `reference-crud-page.tsx`).
+ */
+export function canWriteEventosPagamento(perfilAcesso: PerfilAcesso | undefined): boolean {
+  return canWriteSector("financeiro", perfilAcesso);
+}
+
+/**
  * Leitura da aba "Auditoria" (tela de detalhe do contrato, Fase 4 do
  * frontend) — espelha exatamente `requireRole("Administrador")` em
  * `apps/api/src/modules/auditoria-contratos/auditoria-contratos.routes.ts`.

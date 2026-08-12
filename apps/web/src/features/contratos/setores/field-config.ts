@@ -21,4 +21,15 @@ export type SectorFieldConfig =
       exclusiveMin?: number;
     }
   | { kind: "select"; name: string; label: string; options: readonly string[] }
-  | { kind: "boolean"; name: string; label: string };
+  | { kind: "boolean"; name: string; label: string }
+  /**
+   * Select alimentado por uma entidade externa (id -> nome), não por uma
+   * lista fixa de domínio — diferente de `select` (onde cada opção é seu
+   * próprio value/label, ex.: "Sim"/"Não"). Único uso hoje: `evento` do
+   * prazo de pagamento do Financeiro (`financeiro-tab.tsx`), que busca as
+   * opções via `useEventosPagamento`. `options` é passado pronto (já
+   * `{value, label}[]`) porque só quem monta o field (o componente do
+   * setor) sabe fazer esse fetch — `field-config.ts` continua sem
+   * depender de nenhum hook.
+   */
+  | { kind: "select-entity"; name: string; label: string; options: { value: string; label: string }[] };

@@ -14,6 +14,7 @@ const REFERENCIA_LINKS = [
   { to: "/referencias/importadores", label: "Importadores" },
   { to: "/referencias/representantes", label: "Representantes" },
   { to: "/referencias/status-contrato", label: "Status de contrato" },
+  { to: "/referencias/eventos-pagamento", label: "Eventos de pagamento" },
 ];
 
 /** Sidebar da aplicação — navegação (Fase 2) + logout (Fase 1). */

@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PaginationControls } from "@/components/pagination-controls";
 import { api, ApiError } from "@/lib/api-client";
+import type { PerfilAcesso } from "@/lib/auth-context";
 import { useAuth } from "@/lib/auth-context";
 import type { Paginated } from "@/lib/pagination";
 import { canWriteReferences } from "@/lib/permissions";
@@ -56,6 +57,14 @@ export interface ReferenceCrudConfig<T extends { id: string }> {
   schema: ZodType<FieldValues>;
   defaultValues: FieldValues;
   toFormValues: (row: T) => FieldValues;
+  /**
+   * Override de permissão de escrita — default `canWriteReferences`
+   * (Administrador+Comercial), usado pelas 5 tabelas de referência
+   * originais. `eventos-pagamento-page.tsx` passa `canWriteEventosPagamento`
+   * (Administrador+Financeiro) aqui, já que essa tabela nasceu depois com
+   * perfis de escrita diferentes das demais.
+   */
+  canWrite?: (perfilAcesso: PerfilAcesso | undefined) => boolean;
 }
 
 const PAGE_SIZE = 20;
@@ -71,7 +80,7 @@ const PAGE_SIZE = 20;
 export function ReferenceCrudPage<T extends { id: string }>({ config }: { config: ReferenceCrudConfig<T> }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = canWriteReferences(user?.perfilAcesso);
+  const canWrite = (config.canWrite ?? canWriteReferences)(user?.perfilAcesso);
   const novoLabel = config.genero === "f" ? "Nova" : "Novo";
 
   const [page, setPage] = useState(1);

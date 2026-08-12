@@ -8,6 +8,7 @@ import { produtosRoutes } from "../modules/produtos/produtos.routes.js";
 import { importadoresRoutes } from "../modules/importadores/importadores.routes.js";
 import { representantesRoutes } from "../modules/representantes/representantes.routes.js";
 import { statusContratoRoutes } from "../modules/status-contrato/status-contrato.routes.js";
+import { eventosPagamentoRoutes } from "../modules/eventos-pagamento/eventos-pagamento.routes.js";
 import { contratosRoutes } from "../modules/contratos/contratos.routes.js";
 import { detalhesProducaoRoutes } from "../modules/detalhes-producao/detalhes-producao.routes.js";
 import { detalhesAmbientalRoutes } from "../modules/detalhes-ambiental/detalhes-ambiental.routes.js";
@@ -40,6 +41,9 @@ export async function protectedContext(app: FastifyInstance) {
   await app.register(importadoresRoutes);
   await app.register(representantesRoutes);
   await app.register(statusContratoRoutes);
+  // Tabela de referência do prazo de pagamento (Financeiro) — adicionada
+  // depois da Fase 2, mas é o mesmo tipo de rota.
+  await app.register(eventosPagamentoRoutes);
   await app.register(contratosRoutes);
 
   // Fase 3 — módulos setoriais (Produção, Ambiental, Logística e Financeiro — completa).

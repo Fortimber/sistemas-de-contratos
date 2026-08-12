@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import type { Paginated } from "@/lib/pagination";
-import type { Especie, Produto, Importador, Representante, StatusContrato } from "./types";
+import type { Especie, Produto, Importador, Representante, StatusContrato, EventoPagamento } from "./types";
 
 interface ListParams {
   page?: number;
@@ -47,5 +47,12 @@ export function useStatusContrato(params: ListParams = {}) {
   return useQuery({
     queryKey: ["status-contrato", params],
     queryFn: () => api.get<Paginated<StatusContrato>>(`/status-contrato${buildQuery(params)}`),
+  });
+}
+
+export function useEventosPagamento(params: ListParams = {}) {
+  return useQuery({
+    queryKey: ["eventos-pagamento", params],
+    queryFn: () => api.get<Paginated<EventoPagamento>>(`/eventos-pagamento${buildQuery(params)}`),
   });
 }

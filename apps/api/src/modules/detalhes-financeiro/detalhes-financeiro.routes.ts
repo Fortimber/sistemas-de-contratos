@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { requireRole } from "../../middleware/roles.js";
 
+/** Valores originais — ver comentário em schema.prisma (DetalhesFinanceiro.prazoPagamentoDirecao). */
+const PRAZO_PAGAMENTO_DIRECAO = ["Antes", "Depois"] as const;
+
 const putBodySchema = {
   type: "object",
   additionalProperties: false,
@@ -39,6 +42,12 @@ const putBodySchema = {
     taxaLpcoReais: { type: "number", minimum: 0 },
     despachanteReais: { type: "number", minimum: 0 },
     dhlReais: { type: "number", minimum: 0 },
+    // Prazo de pagamento ("X dias antes/depois de um evento") — não
+    // substitui/complementa modalidadePgtContaBrasil/modalidadePgtContaExterior
+    // (Contrato): modalidade é "à vista"/"parcelado", isto é "quando".
+    prazoPagamentoDias: { type: "integer", minimum: 1 },
+    prazoPagamentoDirecao: { type: "string", enum: PRAZO_PAGAMENTO_DIRECAO },
+    prazoPagamentoEventoId: { type: "string", minLength: 1 },
   },
 } as const;
 
@@ -72,6 +81,9 @@ interface FinanceiroBody {
   taxaLpcoReais?: number;
   despachanteReais?: number;
   dhlReais?: number;
+  prazoPagamentoDias?: number;
+  prazoPagamentoDirecao?: (typeof PRAZO_PAGAMENTO_DIRECAO)[number];
+  prazoPagamentoEventoId?: string;
 }
 
 const WRITE_ROLES = requireRole("Administrador", "Financeiro");
@@ -111,7 +123,10 @@ export async function detalhesFinanceiroRoutes(app: FastifyInstance) {
     const contrato = await request.db.contrato.findFirst({ where: { id: contratoId } });
     if (!contrato) return reply.code(404).send({ message: "Contrato não encontrado." });
 
-    const detalhes = await request.db.detalhesFinanceiro.findUnique({ where: { contratoId } });
+    const detalhes = await request.db.detalhesFinanceiro.findUnique({
+      where: { contratoId },
+      include: { prazoPagamentoEvento: true },
+    });
     if (!detalhes) {
       return reply
         .code(404)
@@ -131,6 +146,15 @@ export async function detalhesFinanceiroRoutes(app: FastifyInstance) {
       const contrato = await request.db.contrato.findFirst({ where: { id: contratoId } });
       if (!contrato) return reply.code(404).send({ message: "Contrato não encontrado." });
 
+      if (body.prazoPagamentoEventoId !== undefined) {
+        const evento = await request.db.eventoPagamento.findFirst({ where: { id: body.prazoPagamentoEventoId } });
+        if (!evento) {
+          return reply
+            .code(400)
+            .send({ message: 'O campo "prazoPagamentoEventoId" não existe ou não pertence à sua organização.' });
+        }
+      }
+
       // Campos de data precisam virar Date: o Prisma não aceita "YYYY-MM-DD"
       // puro como string (mesmo caso de contratos.dataContrato).
       const data = {
@@ -145,6 +169,7 @@ export async function detalhesFinanceiroRoutes(app: FastifyInstance) {
         where: { contratoId },
         create: { contratoId, ...data },
         update: data,
+        include: { prazoPagamentoEvento: true },
       });
 
       return detalhes;

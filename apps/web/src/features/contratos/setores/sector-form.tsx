@@ -76,7 +76,7 @@ export function sectorDetalhesToFormValues(
     const raw = data?.[f.name];
     if (f.kind === "boolean") {
       values[f.name] = raw === true;
-    } else if (f.kind === "select") {
+    } else if (f.kind === "select" || f.kind === "select-entity") {
       values[f.name] = raw != null ? String(raw) : SETOR_SELECT_VAZIO;
     } else if (f.kind === "date" && typeof raw === "string") {
       // Datas vêm como datetime ISO completo da API — <input type="date"> só aceita "YYYY-MM-DD".
@@ -104,7 +104,7 @@ export function sectorFormValuesToPayload(fields: SectorFieldConfig[], values: F
       payload[f.name] = v === true;
       continue;
     }
-    if (f.kind === "select") {
+    if (f.kind === "select" || f.kind === "select-entity") {
       if (typeof v === "string" && v !== SETOR_SELECT_VAZIO && v !== "") payload[f.name] = v;
       continue;
     }
@@ -175,6 +175,26 @@ export function SectorForm({ fields, defaultValues, onSubmit, isSubmitting, subm
                         {f.options.map((opt) => (
                           <SelectItem key={opt} value={opt}>
                             {opt}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                ) : f.kind === "select-entity" ? (
+                  <FormItem>
+                    <FormLabel>{f.label}</FormLabel>
+                    <Select value={field.value as string} onValueChange={field.onChange} disabled={isSubmitting}>
+                      <FormControl>
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value={SETOR_SELECT_VAZIO}>Não selecionado</SelectItem>
+                        {f.options.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
                           </SelectItem>
                         ))}
                       </SelectContent>

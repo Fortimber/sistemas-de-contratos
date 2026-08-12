@@ -281,7 +281,10 @@ Escrita (`POST`/`PATCH`/`DELETE`) é restrita aos perfis `Administrador` e
 `Comercial` — os demais (`Operacional`, `Financeiro`, `Ambiental`) recebem
 `403` ao tentar escrever. A escrita específica de cada setor
 (`detalhes_producao`/`ambiental`/`logistica`/`financeiro`) é Fase 3, ainda
-não existe.
+não existe. **Exceção:** `/eventos-pagamento` (adicionada depois, ver
+abaixo) restringe escrita a `Administrador` e `Financeiro`, não
+`Comercial` — é conceito do setor Financeiro, não uma referência
+comercial/geral como as outras cinco.
 
 ### Tabelas de referência
 
@@ -314,6 +317,30 @@ editar pra um nome já usado responde `409`, não erro bruto do Postgres.
 registro ainda estiver referenciado por algum contrato (ex.: apagar uma
 espécie que tem produto cadastrado, ou um importador com contrato ativo) —
 em vez de deixar vazar a violação de foreign key do Postgres.
+
+#### Eventos de pagamento (`eventos_pagamento`)
+
+Tabela de referência adicionada depois da Fase 2 original, pedido da área
+Financeiro (Carolina): eventos usados no prazo de pagamento do setor
+Financeiro (ex.: "Chegada do navio", "Envio da documentação de embarque" —
+ver seção Financeiro abaixo). Mesmo shape de rota das demais:
+
+```bash
+GET    /eventos-pagamento              # lista paginada
+GET    /eventos-pagamento/:id
+POST   /eventos-pagamento              # { "nomeEvento": "..." }
+PATCH  /eventos-pagamento/:id
+DELETE /eventos-pagamento/:id
+```
+
+Nome único por organização (`409` se duplicado). `DELETE` de um evento em
+uso (referenciado por algum `detalhes_financeiro.prazo_pagamento_evento_id`)
+responde `409` — a FK é opcional (`String?`), então o default do Prisma
+seria `SET NULL`, não bloquear; `onDelete: Restrict` foi setado explicitamente
+no schema pra manter o mesmo comportamento das outras 5 tabelas de
+referência (ver comentário em `schema.prisma`). **Escrita restrita a
+`Administrador`+`Financeiro`** (não `Comercial`, diferente das outras
+cinco — ver "Permissões" acima).
 
 ### Contratos
 
@@ -662,13 +689,29 @@ anteriores; ver lista completa de campos no `schema.prisma`, model
   "taxaCambial": 5.4321,
   "valorRecebidoReais": 240000,
   "comissaoSobreVenda": true,
-  "valorComissaoReais": 2000
+  "valorComissaoReais": 2000,
+  "prazoPagamentoDias": 10,
+  "prazoPagamentoDirecao": "Antes",
+  "prazoPagamentoEventoId": "..."
 }
 ```
 
 - Mesma checagem de `contratoId` (existe e pertence à sua organização antes
   do upsert — `404` claro, nunca `500`) e mesma defesa em profundidade via
   RLS que os outros três setores.
+- **Prazo de pagamento** (`prazoPagamentoDias`/`prazoPagamentoDirecao`/
+  `prazoPagamentoEventoId`, pedido da área Financeiro — Carolina): "X dias
+  antes/depois de um evento de referência" (ex.: "10 dias antes da chegada
+  do navio"). `prazoPagamentoDirecao` só aceita `"Antes"`/`"Depois"` (`400`
+  fora disso, mesmo padrão de `pagamentoBl` em Logística);
+  `prazoPagamentoEventoId` é validado **antes** do upsert (existe e
+  pertence à sua organização, senão `400`, mesmo padrão das FKs de
+  `POST /contratos`) e referencia a tabela `/eventos-pagamento` (ver
+  acima). `GET`/`PUT` devolvem `prazoPagamentoEvento` **populado**
+  (`{ id, nomeEvento }`), não só o id cru. **Não substitui nem complementa**
+  `modalidadePgtContaBrasil`/`modalidadePgtContaExterior` (`Contrato`,
+  seção "Contratos" acima) — modalidade é "à vista"/"parcelado", isto é
+  "quando"; os dois conceitos coexistem.
 - Todo campo monetário (`Decimal`), se enviado, precisa ser `>= 0` — `400`
   se negativo. Ver seção "Precisão monetária" acima sobre `Decimal` vs
   `Float` e como esses valores chegam na resposta (**string**, não number).
@@ -694,19 +737,42 @@ campo monetário negativo `400`, `taxaCambial=0` `400`, usuário `Comercial`
 sem permissão `200`/`403`, `contratoId` inexistente `404`), o passo 3
 confirma explicitamente que os valores monetários voltam como **string** e
 batem exatamente com o que foi enviado (via `Number(...)` — testa a
-serialização do `Decimal` na prática, não só por leitura de código). Limpa
-tudo no final, sucesso ou falha.
+serialização do `Decimal` na prática, não só por leitura de código). Os
+passos 10-11 (adicionados junto com o prazo de pagamento) confirmam que
+`PUT` vincula o evento e que `GET` devolve `prazoPagamentoEvento` já
+populado, e que `prazoPagamentoDirecao` fora de `Antes`/`Depois` responde
+`400`. Limpa tudo no final, sucesso ou falha.
 
 ```bash
 docker compose exec api npm run smoke:fase3-financeiro
 ```
 
-Com auth por cookie (Fase 1), Fase 2, Fase 3 (completa) e Fase 4 no ar, os 7
+### Smoke test automatizado (Eventos de pagamento)
+
+`apps/api/scripts/smoke-test-eventos-pagamento.ts` — primeiro smoke test
+**dedicado** a uma tabela de referência individual (as outras 5 só são
+exercitadas indiretamente via `criarReferencias()` dentro de
+`smoke-test-fase2.ts`, nunca com CRUD próprio). Cobre: criação, `GET`
+por id, listagem, edição (`PATCH`), nome duplicado (`409`), usuário
+`Comercial` sem permissão (`GET` `200`/`POST` `403`), usuário `Financeiro`
+com permissão (`POST` `201`), vínculo com um contrato via
+`PUT /contratos/:id/financeiro` confirmando `prazoPagamentoEvento`
+populado tanto no `PUT` quanto no `GET`, `prazoPagamentoEventoId`
+inexistente (`400`), exclusão de evento em uso (`409`) e, depois de
+remover o contrato que o usava, exclusão do mesmo evento com sucesso
+(`204`) — e `404` em `GET`/`PATCH`/`DELETE` de um id inexistente. Limpa
+tudo no final, sucesso ou falha.
+
+```bash
+docker compose exec api npm run smoke:eventos-pagamento
+```
+
+Com auth por cookie (Fase 1), Fase 2, Fase 3 (completa) e Fase 4 no ar, os 8
 smoke tests (`fase1-cookie-auth`, `fase2`, `fase3-producao`,
-`fase3-ambiental`, `fase3-logistica`, `fase3-financeiro`, `fase4`) devem ser
-reconfirmados juntos sempre que houver mudança de schema ou nos módulos
-compartilhados (`middleware/`, `lib/`, `scripts/smoke-test-helpers.ts`,
-`scripts/smoke-test-fixtures.ts`):
+`fase3-ambiental`, `fase3-logistica`, `fase3-financeiro`, `fase4`,
+`eventos-pagamento`) devem ser reconfirmados juntos sempre que houver
+mudança de schema ou nos módulos compartilhados (`middleware/`, `lib/`,
+`scripts/smoke-test-helpers.ts`, `scripts/smoke-test-fixtures.ts`):
 
 ```bash
 docker compose exec api npm run smoke:fase1-cookie-auth && \
@@ -715,7 +781,8 @@ docker compose exec api npm run smoke:fase3-producao && \
 docker compose exec api npm run smoke:fase3-ambiental && \
 docker compose exec api npm run smoke:fase3-logistica && \
 docker compose exec api npm run smoke:fase3-financeiro && \
-docker compose exec api npm run smoke:fase4
+docker compose exec api npm run smoke:fase4 && \
+docker compose exec api npm run smoke:eventos-pagamento
 ```
 
 ## Histórico e auditoria (Fase 4)
@@ -877,6 +944,15 @@ componente genérico e configurável:
   que alguém monte a requisição direto.
 - Concordância de gênero (`ReferenceCrudConfig.genero`): "Nova espécie",
   não "Novo espécie" — achado real testando no navegador.
+- **`eventos-pagamento-page.tsx`** (adicionada depois, junto com o prazo de
+  pagamento do Financeiro — ver seção do backend acima): mesma config sobre
+  `ReferenceCrudPage`, mas com escrita restrita a `Administrador`+
+  `Financeiro`, não `Administrador`+`Comercial` como as outras 5. Isso
+  exigiu tornar a permissão de escrita **configurável** em
+  `ReferenceCrudConfig` (`canWrite?`, default `canWriteReferences` — as
+  outras 5 configs não precisaram mudar); esta página passa
+  `canWriteEventosPagamento` (`src/lib/permissions.ts`, mesmos perfis de
+  `canWriteSector("financeiro", ...)`).
 
 **Contratos** (`src/features/contratos/`):
 
@@ -998,9 +1074,16 @@ sempre `PUT` (upsert), igual a API.
 **`src/features/contratos/setores/`** — tudo desta fase:
 
 - **`field-config.ts`**: descreve declarativamente os campos de um setor
-  (`text`/`date`/`number`/`select`/`boolean`) — a mesma lista alimenta o
-  formulário e a visão somente-leitura, pra não repetir nome/label de campo
-  duas vezes por setor (Financeiro sozinho tem quase 30 campos).
+  (`text`/`date`/`number`/`select`/`boolean`/`select-entity`) — a mesma
+  lista alimenta o formulário e a visão somente-leitura, pra não repetir
+  nome/label de campo duas vezes por setor (Financeiro sozinho tem quase 30
+  campos). `select-entity` (adicionado junto com o prazo de pagamento) é a
+  diferença pro `select` comum: em vez de uma lista fixa de domínio
+  (`options: readonly string[]`, ex.: `pagamentoBl`), é alimentado por uma
+  entidade externa (`options: {value, label}[]`, já pronta) — único uso
+  hoje é o `evento` do Financeiro, buscado via `useEventosPagamento` dentro
+  de `financeiro-tab.tsx` (não dentro de `field-config.ts`, que continua
+  sem depender de hook nenhum).
 - **`sector-form.tsx`** (`SectorForm`): formulário genérico dirigido por
   `fields`, mesmo espírito de `ReferenceCrudPage` (Fase 2) generalizado pra
   cobrir também `date`/`boolean`. Todo campo — inclusive os numéricos/
@@ -1036,7 +1119,13 @@ sempre `PUT` (upsert), igual a API.
   usa texto livre pros 3 campos sem lista fixa documentada
   (`statusEmbarqueXCambio`, `statusGeralCambio`, `formaPagamento`) — mesma
   decisão em aberto que já existe no backend (ver
-  `detalhes-financeiro.routes.ts`).
+  `detalhes-financeiro.routes.ts`). Financeiro é o único dos 4 cujos
+  `fields` não são uma constante de módulo fixa: os 3 campos do prazo de
+  pagamento (`prazoPagamentoDias`, `prazoPagamentoDirecao` — `<Select>`
+  "Antes"/"Depois" — e `prazoPagamentoEventoId` — `select-entity`) são
+  montados dentro do próprio componente `FinanceiroTab`, concatenados a
+  `STATIC_FIELDS`, porque o `evento` depende de um `useEventosPagamento()`
+  buscado em runtime — `field-config.ts` não sabe fazer esse fetch.
 
 **Permissão de escrita por aba** (`src/lib/permissions.ts`,
 `canWriteSector`) — espelha exatamente o `requireRole(...)` de cada
@@ -1205,14 +1294,14 @@ apps/api/
     lib/          # prisma client, jwt sign/verify, paginação, tradução de erros do Prisma
     middleware/   # auth, tenant-scoping, roles, audit-logger
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
-                   # representantes, status-contrato, contratos, detalhes-producao,
-                   # detalhes-ambiental, detalhes-logistica, detalhes-financeiro,
-                   # historico-status-contrato, auditoria-contratos — Fases 1-4 completas)
+                   # representantes, status-contrato, eventos-pagamento, contratos,
+                   # detalhes-producao, detalhes-ambiental, detalhes-logistica,
+                   # detalhes-financeiro, historico-status-contrato, auditoria-contratos)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
   scripts/        # smoke tests por fase (smoke-test-fase1-cookie-auth.ts, smoke-test-fase2.ts,
                    # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
                    # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
-                   # smoke-test-fase4.ts)
+                   # smoke-test-fase4.ts, smoke-test-eventos-pagamento.ts)
 apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção "Frontend" acima
   src/
     components/
@@ -1221,22 +1310,25 @@ apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção 
       full-page-loading.tsx  # estado de carregamento (boot da sessão)
       pagination-controls.tsx # Anterior/Próxima — reusado por referências, contratos e histórico/auditoria
     features/
-      referencias/  # especies/produtos/importadores/representantes/status-contrato-page.tsx
-                     # (config sobre reference-crud-page.tsx, o CRUD genérico), hooks.ts, types.ts
+      referencias/  # especies/produtos/importadores/representantes/status-contrato/
+                     # eventos-pagamento-page.tsx (config sobre reference-crud-page.tsx, o
+                     # CRUD genérico — eventos-pagamento com canWrite próprio, Financeiro-only),
+                     # hooks.ts, types.ts
       contratos/    # contratos-list-page, contrato-create/edit/detail-page, contrato-form.tsx
                      # (formulário único, reusado por criar e editar), hooks.ts, types.ts
         setores/    # abas Produção/Ambiental/Logística/Financeiro da tela de detalhe (Fase 3):
-                     # field-config.ts (schema declarativo dos campos por setor), sector-form.tsx
-                     # (formulário genérico), sector-read-only.tsx, sector-tab.tsx (casca comum),
-                     # hooks.ts (GET+PUT por setor), producao/ambiental/logistica/financeiro-tab.tsx
+                     # field-config.ts (schema declarativo dos campos por setor, inclui
+                     # select-entity pro evento de pagamento), sector-form.tsx (formulário
+                     # genérico), sector-read-only.tsx, sector-tab.tsx (casca comum), hooks.ts
+                     # (GET+PUT por setor), producao/ambiental/logistica/financeiro-tab.tsx
         historico-auditoria/  # abas Histórico/Auditoria da tela de detalhe (Fase 4): types.ts,
                      # hooks.ts (GET paginado por aba, "alterado por" já populado pela API),
                      # historico-tab.tsx, auditoria-tab.tsx (só monta se canViewAuditoria — aba
                      # ausente pra quem não é Admin)
     lib/          # api-client (fetch central + refreshSession deduplicado), auth-context
                    # (AuthProvider/useAuth), permissions (canWriteReferences, canWriteSector,
-                   # canViewAuditoria), pagination (types Paginated/PaginationMeta),
-                   # query-client (TanStack Query), utils (cn)
+                   # canWriteEventosPagamento, canViewAuditoria), pagination (types
+                   # Paginated/PaginationMeta), query-client (TanStack Query), utils (cn)
     pages/        # login-page.tsx
     routes/       # route-guards (ProtectedRoute, PublicOnlyRoute)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)

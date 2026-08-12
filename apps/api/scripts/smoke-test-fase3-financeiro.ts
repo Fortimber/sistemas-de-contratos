@@ -14,6 +14,11 @@
  * na rodada de Produção (scripts/smoke-test-fixtures.ts,
  * scripts/smoke-test-helpers.ts) — não duplica essa lógica aqui.
  *
+ * Passos 10-11 cobrem o prazo de pagamento (`prazoPagamentoDias`/
+ * `prazoPagamentoDirecao`/`prazoPagamentoEventoId`, pedido da área
+ * Financeiro) — o CRUD completo da tabela de referência `eventos_pagamento`
+ * em si é testado à parte, ver scripts/smoke-test-eventos-pagamento.ts.
+ *
  * Uso (de dentro do container da API, com a API já rodando):
  *   docker compose exec api npm run smoke:fase3-financeiro
  *
@@ -48,6 +53,7 @@ async function main() {
 
   let primeiroDetalhesId = "";
   let comercialUserId = "";
+  let eventoPagamentoId = "";
 
   const steps: SmokeStep[] = [
     {
@@ -194,12 +200,58 @@ async function main() {
         assert(status === 404, `esperado 404, veio ${status}: ${JSON.stringify(json)}`);
       },
     },
+    {
+      name: "10) Prazo de pagamento (evento de referência): PUT vincula, GET devolve evento populado",
+      run: async () => {
+        const evento = await api("POST", "/eventos-pagamento", {
+          token: adminToken,
+          body: { nomeEvento: `Chegada do navio ${runId}` },
+        });
+        assert(evento.status === 201, `criar evento: esperado 201, veio ${evento.status}: ${JSON.stringify(evento.json)}`);
+        eventoPagamentoId = evento.json.id;
+
+        const put = await api("PUT", `/contratos/${contratoId}/financeiro`, {
+          token: adminToken,
+          body: { prazoPagamentoDias: 10, prazoPagamentoDirecao: "Antes", prazoPagamentoEventoId: eventoPagamentoId },
+        });
+        assert(put.status === 200, `PUT: esperado 200, veio ${put.status}: ${JSON.stringify(put.json)}`);
+        assert(put.json.prazoPagamentoDias === 10, `prazoPagamentoDias esperado 10, veio ${put.json.prazoPagamentoDias}`);
+        assert(
+          put.json.prazoPagamentoDirecao === "Antes",
+          `prazoPagamentoDirecao esperado "Antes", veio "${put.json.prazoPagamentoDirecao}"`,
+        );
+        assert(
+          put.json.prazoPagamentoEvento?.nomeEvento === `Chegada do navio ${runId}`,
+          `prazoPagamentoEvento não veio populado no PUT: ${JSON.stringify(put.json.prazoPagamentoEvento)}`,
+        );
+
+        const get = await api("GET", `/contratos/${contratoId}/financeiro`, { token: adminToken });
+        assert(get.status === 200, `GET: esperado 200, veio ${get.status}: ${JSON.stringify(get.json)}`);
+        assert(
+          get.json.prazoPagamentoEvento?.id === eventoPagamentoId,
+          `GET prazoPagamentoEvento.id esperado "${eventoPagamentoId}", veio ${JSON.stringify(get.json.prazoPagamentoEvento)}`,
+        );
+      },
+    },
+    {
+      name: "11) PUT financeiro com prazoPagamentoDirecao fora de Antes/Depois -> 400",
+      run: async () => {
+        const { status, json } = await api("PUT", `/contratos/${contratoId}/financeiro`, {
+          token: adminToken,
+          body: { prazoPagamentoDirecao: "Durante" },
+        });
+        assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
+      },
+    },
   ];
 
   const result = await runSmokeSteps(steps, async () => {
     // detalhes_financeiro tem onDelete: Cascade a partir de contratos — não
-    // precisa de delete próprio, cai junto com limparFixture abaixo.
+    // precisa de delete próprio, cai junto com limparFixture abaixo. Precisa
+    // deletar o contrato ANTES do evento de pagamento (libera a FK
+    // prazo_pagamento_evento_id) — limparFixture já faz isso primeiro.
     await limparFixture(prisma, numeroContrato, { produtoId, especieId, importadorId, representanteId, statusId });
+    if (eventoPagamentoId) await prisma.eventoPagamento.deleteMany({ where: { id: eventoPagamentoId } });
     if (comercialUserId) await prisma.usuario.deleteMany({ where: { id: comercialUserId } });
   });
 

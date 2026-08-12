@@ -24,6 +24,7 @@ export type LpcoStatus = "Em análise" | "Protocolada" | "Deferida" | "Indeferid
 export type CitesStatus = "Não se aplica" | "Em análise" | "Deferida" | "Indeferida";
 export type StatusAprovacaoCocCliente = "Pendente" | "Aprovado" | "Reprovado";
 export type PagamentoBl = "Sim" | "Não";
+export type PrazoPagamentoDirecao = "Antes" | "Depois";
 
 export interface DetalhesProducao extends DetalhesBase {
   numeroRomaneio: string | null;
@@ -102,4 +103,15 @@ export interface DetalhesFinanceiro extends DetalhesBase {
   taxaLpcoReais: string | null;
   despachanteReais: string | null;
   dhlReais: string | null;
+  /**
+   * Prazo de pagamento ("X dias antes/depois de um evento de referência") —
+   * NÃO substitui/complementa modalidadePgtContaBrasil/
+   * modalidadePgtContaExterior (Contrato, ver types.ts): modalidade é "à
+   * vista"/"parcelado", isto é "quando". `prazoPagamentoEvento` vem
+   * populado pela API (não só o id) — ver detalhes-financeiro.routes.ts.
+   */
+  prazoPagamentoDias: number | null;
+  prazoPagamentoDirecao: PrazoPagamentoDirecao | null;
+  prazoPagamentoEventoId: string | null;
+  prazoPagamentoEvento: { id: string; nomeEvento: string } | null;
 }

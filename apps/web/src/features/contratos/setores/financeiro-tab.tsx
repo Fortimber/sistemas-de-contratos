@@ -1,11 +1,15 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { REFERENCE_OPTIONS_PAGE_SIZE, useEventosPagamento } from "@/features/referencias/hooks";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { canWriteSector } from "@/lib/permissions";
 import type { SectorFieldConfig } from "./field-config";
 import { useDetalhesFinanceiro, useSalvarDetalhesFinanceiro } from "./hooks";
 import { SectorTab } from "./sector-tab";
+
+/** Valores originais — ver comentário em schema.prisma (DetalhesFinanceiro.prazoPagamentoDirecao). */
+const PRAZO_PAGAMENTO_DIRECAO = ["Antes", "Depois"] as const;
 
 /**
  * Espelha DetalhesFinanceiro no schema.prisma. statusEmbarqueXCambio/
@@ -19,8 +23,14 @@ import { SectorTab } from "./sector-tab";
  * outro numérico — a garantia de precisão (nunca converter pra number fora
  * da hora de montar o payload) já é do formulário genérico
  * (sector-form.tsx), não precisa de um "kind" à parte aqui.
+ *
+ * Os 3 campos do prazo de pagamento (dias/direção/evento) NÃO entram nesta
+ * lista estática — `prazoPagamentoEventoId` é um `select-entity`
+ * alimentado por `/eventos-pagamento` (busca em runtime, ver
+ * `useEventosPagamento` abaixo), então a lista completa só existe dentro
+ * do componente (`fields`, montada a partir de `STATIC_FIELDS` + esses 3).
  */
-const FIELDS: SectorFieldConfig[] = [
+const STATIC_FIELDS: SectorFieldConfig[] = [
   { kind: "text", name: "nfNumero", label: "Número da NF" },
   { kind: "date", name: "nfData", label: "Data da NF" },
   { kind: "number", name: "nfVolumeM3", label: "Volume da NF (m³)" },
@@ -59,6 +69,29 @@ export function FinanceiroTab({ contratoId }: { contratoId: string }) {
   const query = useDetalhesFinanceiro(contratoId);
   const mutation = useSalvarDetalhesFinanceiro(contratoId);
 
+  // pageSize alto pra alimentar o <Select> do evento — mesmo espírito de
+  // REFERENCE_OPTIONS_PAGE_SIZE em produtos-page.tsx (tabela de apoio, cabe
+  // tudo numa página).
+  const eventosQuery = useEventosPagamento({ pageSize: REFERENCE_OPTIONS_PAGE_SIZE });
+  const eventos = eventosQuery.data?.data ?? [];
+
+  const fields: SectorFieldConfig[] = [
+    ...STATIC_FIELDS,
+    { kind: "number", name: "prazoPagamentoDias", label: "Prazo de pagamento (dias)", integer: true, min: 1 },
+    {
+      kind: "select",
+      name: "prazoPagamentoDirecao",
+      label: "Antes ou depois do evento",
+      options: PRAZO_PAGAMENTO_DIRECAO,
+    },
+    {
+      kind: "select-entity",
+      name: "prazoPagamentoEventoId",
+      label: "Evento de referência",
+      options: eventos.map((e) => ({ value: e.id, label: e.nomeEvento })),
+    },
+  ];
+
   return (
     <Card>
       <CardHeader>
@@ -66,7 +99,7 @@ export function FinanceiroTab({ contratoId }: { contratoId: string }) {
       </CardHeader>
       <CardContent>
         <SectorTab
-          fields={FIELDS}
+          fields={fields}
           data={query.data as Record<string, unknown> | null | undefined}
           isLoading={query.isLoading}
           isError={query.isError}

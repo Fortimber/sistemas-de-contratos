@@ -32,3 +32,9 @@ export interface StatusContrato {
   setorResponsavel: SetorResponsavel;
   ordem: number;
 }
+
+/** Evento de referência do prazo de pagamento (setor Financeiro) — ver DetalhesFinanceiro.prazoPagamentoEventoId. */
+export interface EventoPagamento {
+  id: string;
+  nomeEvento: string;
+}

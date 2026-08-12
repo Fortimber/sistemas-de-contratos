@@ -5,6 +5,7 @@ import { ContratoDetailPage } from "@/features/contratos/contrato-detail-page";
 import { ContratoEditPage } from "@/features/contratos/contrato-edit-page";
 import { ContratosListPage } from "@/features/contratos/contratos-list-page";
 import { EspeciesPage } from "@/features/referencias/especies-page";
+import { EventosPagamentoPage } from "@/features/referencias/eventos-pagamento-page";
 import { ImportadoresPage } from "@/features/referencias/importadores-page";
 import { ProdutosPage } from "@/features/referencias/produtos-page";
 import { RepresentantesPage } from "@/features/referencias/representantes-page";
@@ -32,6 +33,7 @@ function App() {
           <Route path="/referencias/importadores" element={<ImportadoresPage />} />
           <Route path="/referencias/representantes" element={<RepresentantesPage />} />
           <Route path="/referencias/status-contrato" element={<StatusContratoPage />} />
+          <Route path="/referencias/eventos-pagamento" element={<EventosPagamentoPage />} />
         </Route>
       </Route>
     </Routes>
