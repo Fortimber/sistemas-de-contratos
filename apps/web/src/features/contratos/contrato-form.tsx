@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { REFERENCE_OPTIONS_PAGE_SIZE, useImportadores, useProdutos, useRepresentantes, useStatusContrato } from "@/features/referencias/hooks";
 import { useContratos } from "./hooks";
-import type { Contrato } from "./types";
+import { TIPO_CONTRATO_LABELS, type Contrato } from "./types";
 
 const TIPO_CONTRATO = ["Original", "Aditivo"] as const;
 const TIPO_FRETE = ["FOB", "CFR", "CIF"] as const;
@@ -56,6 +56,20 @@ const contratoFormSchema = z.object({
   modalidadePgtContaBrasil: z.enum(MODALIDADES_PGT, { message: "Selecione a modalidade de pagamento (Brasil)." }),
   modalidadePgtContaExterior: z.enum(MODALIDADES_PGT, { message: "Selecione a modalidade de pagamento (exterior)." }),
   contratoPaiId: z.string().optional(),
+}).superRefine((values, ctx) => {
+  // Espelha a regra de negócio da API (contratos.service.ts,
+  // validarVinculoAditivo): "Aditivo" exige um contrato original
+  // selecionado. Não valida o inverso ("Único" não pode ter pai) aqui —
+  // contratoFormValuesToPayload sempre manda null nesse caso,
+  // independente do que estiver no campo (ver comentário lá), então não
+  // tem como o usuário mandar um contratoPaiId indevido por essa tela.
+  if (values.tipoContrato === "Aditivo" && (!values.contratoPaiId || values.contratoPaiId === NENHUM_CONTRATO_PAI)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["contratoPaiId"],
+      message: "Selecione o contrato original — obrigatório quando o tipo é Aditivo.",
+    });
+  }
 });
 
 export type ContratoFormValues = z.infer<typeof contratoFormSchema>;
@@ -90,8 +104,13 @@ export const CONTRATO_FORM_DEFAULT_VALUES: ContratoFormValues = {
  * formulário — nunca passa os valores do RHF direto: comissaoPct/
  * comissaoMetragem (opcionais) só entram no corpo se preenchidos
  * (convertidos pra number aqui, não antes — ver comentário no schema
- * acima), e contratoPaiId só entra se um contrato pai de verdade foi
- * escolhido (não o sentinela "nenhum").
+ * acima). `contratoPaiId` sempre entra no payload, nunca é omitido: `null`
+ * quando o tipo é "Único" (mesmo que o campo tivesse algo selecionado
+ * antes — próprio schema garante isso via `superRefine`, mas aqui é
+ * defensivo), ou o id escolhido quando é "Aditivo". Mandar `null`
+ * explícito (não omitir) é o que permite ao PATCH desvincular um Aditivo
+ * existente ao trocá-lo de volta pra "Único" — ver o mesmo comentário do
+ * lado da API (contratos.routes.ts, `contratoPaiId` no schema do PATCH).
  */
 export function contratoFormValuesToPayload(values: ContratoFormValues): Record<string, unknown> {
   const { comissaoPct, comissaoMetragem, contratoPaiId, ...rest } = values;
@@ -99,7 +118,8 @@ export function contratoFormValuesToPayload(values: ContratoFormValues): Record<
 
   if (comissaoPct !== undefined && comissaoPct.trim() !== "") payload.comissaoPct = Number(comissaoPct);
   if (comissaoMetragem !== undefined && comissaoMetragem.trim() !== "") payload.comissaoMetragem = Number(comissaoMetragem);
-  if (contratoPaiId && contratoPaiId !== NENHUM_CONTRATO_PAI) payload.contratoPaiId = contratoPaiId;
+  payload.contratoPaiId =
+    values.tipoContrato === "Aditivo" && contratoPaiId && contratoPaiId !== NENHUM_CONTRATO_PAI ? contratoPaiId : null;
 
   return payload;
 }
@@ -174,7 +194,12 @@ export function ContratoForm({
   const representantes = representantesQuery.data?.data ?? [];
   const produtos = produtosQuery.data?.data ?? [];
   const statusList = statusQuery.data?.data ?? [];
-  const contratosParaPai = (contratosQuery.data?.data ?? []).filter((c) => c.id !== excludeContratoId);
+  // Só contratos "Original" — mesma regra de negócio da API
+  // (validarVinculoAditivo): um Aditivo só pode apontar pra um Original,
+  // nunca pra outro Aditivo (sem encadeamento).
+  const contratosParaPai = (contratosQuery.data?.data ?? []).filter(
+    (c) => c.id !== excludeContratoId && c.tipoContrato === "Original",
+  );
 
   const referenciasCarregando =
     importadoresQuery.isLoading || representantesQuery.isLoading || produtosQuery.isLoading || statusQuery.isLoading;
@@ -197,6 +222,13 @@ export function ContratoForm({
     resolver: zodResolver(contratoFormSchema),
     defaultValues: defaultValues as z.input<typeof contratoFormSchema>,
   });
+
+  // Controla a exibição do campo "Contrato original" — só aparece (e só é
+  // exigido) quando o tipo selecionado é "Aditivo" (ver superRefine no
+  // schema e contratoFormValuesToPayload acima). Chamado antes de qualquer
+  // `return` condicional abaixo — mesmo raciocínio de regra de hooks que já
+  // vale pros outros hooks deste componente (ordem de chamada estável entre renders).
+  const tipoContratoSelecionado = form.watch("tipoContrato");
 
   if (referenciasCarregando) {
     return <p className="text-sm text-muted-foreground">Carregando dados de referência…</p>;
@@ -245,7 +277,7 @@ export function ContratoForm({
                   <SelectContent>
                     {TIPO_CONTRATO.map((v) => (
                       <SelectItem key={v} value={v}>
-                        {v}
+                        {TIPO_CONTRATO_LABELS[v]}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -447,31 +479,35 @@ export function ContratoForm({
             )}
           />
 
-          <FormField
-            control={form.control}
-            name="contratoPaiId"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Contrato pai (opcional)</FormLabel>
-                <Select value={field.value} onValueChange={field.onChange} disabled={isSubmitting}>
-                  <FormControl>
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    <SelectItem value={NENHUM_CONTRATO_PAI}>Nenhum</SelectItem>
-                    {contratosParaPai.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.numeroContrato}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          {/* Só aparece pra "Aditivo" — pra "Único" o campo nem faz sentido
+              (contratoFormValuesToPayload já garante null nesse caso,
+              independente do que estivesse selecionado antes de trocar o tipo). */}
+          {tipoContratoSelecionado === "Aditivo" && (
+            <FormField
+              control={form.control}
+              name="contratoPaiId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Contrato original</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange} disabled={isSubmitting}>
+                    <FormControl>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Selecione…" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {contratosParaPai.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.numeroContrato}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">

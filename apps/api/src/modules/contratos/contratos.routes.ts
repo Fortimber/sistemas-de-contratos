@@ -2,7 +2,13 @@ import type { FastifyInstance } from "fastify";
 import { parsePagination, paginationMeta } from "../../lib/pagination.js";
 import { isUniqueConstraintError } from "../../lib/prisma-errors.js";
 import { requireRole } from "../../middleware/roles.js";
-import { RELATION_INCLUDE, ReferenciaInvalidaError, validarReferencias } from "./contratos.service.js";
+import {
+  RELATION_INCLUDE,
+  ReferenciaInvalidaError,
+  validarReferencias,
+  validarVinculoAditivo,
+  VinculoAditivoInvalidoError,
+} from "./contratos.service.js";
 
 const TIPO_CONTRATO = ["Original", "Aditivo"] as const;
 const TIPO_FRETE = ["FOB", "CFR", "CIF"] as const;
@@ -31,7 +37,13 @@ const contratoFields = {
   moedaValorTotal: { type: "string", minLength: 1 },
   modalidadePgtContaBrasil: { type: "string", minLength: 1 },
   modalidadePgtContaExterior: { type: "string", minLength: 1 },
-  contratoPaiId: { type: "string", minLength: 1 },
+  // Aceita `null` (não só string/ausente) — necessário pro PATCH poder
+  // desvincular explicitamente um Aditivo (contratoPaiId volta a null) ao
+  // mudar tipoContrato de volta pra "Original". Sem isso não haveria como
+  // "limpar" o campo via PATCH (Ajv não aceita string vazia == minLength 1),
+  // e a validação de vínculo (contratos.service.ts) rejeitaria pra sempre
+  // essa transição, já que o valor antigo continuaria "preso" no registro.
+  contratoPaiId: { type: ["string", "null"], minLength: 1 },
 } as const;
 
 const createBodySchema = {
@@ -104,7 +116,8 @@ interface ContratoFields {
   moedaValorTotal: string;
   modalidadePgtContaBrasil: string;
   modalidadePgtContaExterior: string;
-  contratoPaiId: string;
+  /** `null` explícito = "sem contrato pai" (limpa, se já tinha); ausente (PATCH) = "não mexe". */
+  contratoPaiId?: string | null;
 }
 
 /** POST — schema JSON já garante os campos obrigatórios de ContratoFields presentes. */
@@ -159,8 +172,9 @@ export async function contratosRoutes(app: FastifyInstance) {
 
       try {
         await validarReferencias(request.db, body);
+        await validarVinculoAditivo(request.db, body.tipoContrato, body.contratoPaiId ?? null);
       } catch (err) {
-        if (err instanceof ReferenciaInvalidaError) {
+        if (err instanceof ReferenciaInvalidaError || err instanceof VinculoAditivoInvalidoError) {
           return reply.code(400).send({ message: err.message });
         }
         throw err;
@@ -201,10 +215,22 @@ export async function contratosRoutes(app: FastifyInstance) {
       const existing = await request.db.contrato.findFirst({ where: { id } });
       if (!existing) return reply.code(404).send({ message: "Contrato não encontrado." });
 
+      // Valores EFETIVOS depois do PATCH (mescla o que veio no body com o
+      // que já existia) — a regra de vínculo Original/Aditivo precisa
+      // validar o estado final, não só o que foi enviado nesta chamada
+      // (ex.: mudar só tipoContrato pra "Aditivo", sem reenviar
+      // contratoPaiId, tem que continuar exigindo contratoPaiId). Mesma
+      // ideia de "não sobrescreve o que não foi enviado" que updateMany já
+      // segue pra todo o resto — aqui só explícita porque a validação
+      // precisa do valor final, não pode inferir do body parcial sozinho.
+      const tipoContratoEfetivo = body.tipoContrato ?? existing.tipoContrato;
+      const contratoPaiIdEfetivo = body.contratoPaiId !== undefined ? body.contratoPaiId : existing.contratoPaiId;
+
       try {
         await validarReferencias(request.db, body);
+        await validarVinculoAditivo(request.db, tipoContratoEfetivo, contratoPaiIdEfetivo, id);
       } catch (err) {
-        if (err instanceof ReferenciaInvalidaError) {
+        if (err instanceof ReferenciaInvalidaError || err instanceof VinculoAditivoInvalidoError) {
           return reply.code(400).send({ message: err.message });
         }
         throw err;

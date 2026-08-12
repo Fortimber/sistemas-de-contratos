@@ -321,7 +321,7 @@ em vez de deixar vazar a violação de foreign key do Postgres.
 GET  /contratos                          # paginado
 GET  /contratos?statusId=<id>            # filtro por status
 GET  /contratos?importadorId=<id>        # filtro por importador (combináveis)
-GET  /contratos/:id                      # inclui importador/representante/produto/status populados
+GET  /contratos/:id                      # inclui importador/representante/produto/status/contratoPai/aditivos populados
 POST /contratos
 PATCH /contratos/:id
 ```
@@ -336,7 +336,7 @@ os opcionais indicados):
   "representanteId": "...",
   "produtoId": "...",
   "statusId": "...",
-  "contratoPaiId": "...",             // opcional — usar em aditivos
+  "contratoPaiId": "...",             // obrigatório quando tipoContrato = "Aditivo", proibido quando "Original" — ver abaixo
   "tipoContrato": "Original",         // "Original" | "Aditivo"
   "dataContrato": "2026-01-15",
   "volumeM3": 120.5,
@@ -356,30 +356,68 @@ os opcionais indicados):
 }
 ```
 
-- `importadorId`, `representanteId`, `produtoId`, `statusId` e
-  `contratoPaiId` (se enviado) são validados **antes** do insert — cada um
-  precisa existir e pertencer à sua organização, senão a resposta é `400`
-  identificando o campo problemático (`{ "message": "O campo \"produtoId\"
-  não existe ou não pertence à sua organização." }`), nunca um `500` cru.
+- `importadorId`, `representanteId`, `produtoId` e `statusId` são
+  validados **antes** do insert — cada um precisa existir e pertencer à
+  sua organização, senão a resposta é `400` identificando o campo
+  problemático (`{ "message": "O campo \"produtoId\" não existe ou não
+  pertence à sua organização." }`), nunca um `500` cru.
 - `numeroContrato` é único por organização — duplicar responde `409`.
 - `criadoPorId` é preenchido automaticamente com o usuário autenticado; não
   precisa (e não é aceito) no body.
 - `PATCH /contratos/:id` aceita qualquer subconjunto dos mesmos campos
   (atualização parcial) e preenche `atualizadoPorId` automaticamente. Se
-  `statusId` mudar, por enquanto só grava o valor novo em `contratos` — sem
-  gerar histórico ainda (isso é Fase 4, tabela `historico_status_contrato`).
+  `statusId` mudar, uma linha nova é gravada em
+  `historico_status_contrato` (ver seção "Histórico e auditoria (Fase 4)"
+  mais abaixo).
 - Não existe `DELETE /contratos/:id` nesta fase.
+
+#### Vínculo Original/Aditivo
+
+O schema já vinha com `tipoContrato` (`Original`/`Aditivo`) e
+`contratoPaiId` desde a Fase 2 — faltava a regra de negócio amarrando os
+dois, adicionada nesta rodada (`contratos.service.ts`,
+`validarVinculoAditivo`):
+
+- `tipoContrato = "Original"`: `contratoPaiId` tem que ser `null`/ausente.
+  Enviar preenchido responde `400`.
+- `tipoContrato = "Aditivo"`: `contratoPaiId` é **obrigatório**, precisa
+  existir, pertencer à mesma organização, e apontar pra um contrato do
+  tipo `"Original"` — nunca outro `"Aditivo"` (sem encadeamento: aditivo
+  sempre vincula direto ao original). Qualquer violação responde `400`
+  com mensagem específica do caso (ausente / não existe-ou-não-pertence /
+  não é Original).
+- Validado tanto no `POST` quanto no `PATCH` — no `PATCH`, contra o estado
+  **efetivo** (o que foi enviado mesclado com o que já existia), não só o
+  que veio nesta chamada. Um Original que já tem aditivos vinculados a ele
+  não pode virar `"Aditivo"` sem antes desvincular esses aditivos (fecha
+  um furo que a regra sozinha não cobre: sem isso seria possível criar
+  encadeamento indireto via `PATCH`).
+- Pra desvincular um Aditivo existente (trocar `tipoContrato` de volta pra
+  `"Original"`), o `PATCH` precisa mandar `"contratoPaiId": null`
+  explícito — só omitir o campo significa "não mexe", não "limpa" (mesma
+  convenção de toda atualização parcial desta API).
+- `GET /contratos/:id` (e as respostas de `POST`/`PATCH`) incluem
+  `contratoPai: { id, numeroContrato } | null` e `aditivos: [{ id,
+  numeroContrato }]` — um Original resolve `contratoPai: null` e
+  `aditivos` com os vinculados (pode ser `[]`); um Aditivo resolve
+  `contratoPai` populado e `aditivos: []` sempre.
 
 ### Smoke test automatizado (Fase 2)
 
-`apps/api/scripts/smoke-test-fase2.ts` roda os 11 cenários acima (criação
+`apps/api/scripts/smoke-test-fase2.ts` roda os 18 cenários acima (criação
 das referências, contrato, listagem, filtro, edição, número duplicado,
 exclusão de referência em uso, usuário `Operacional` sem permissão de
-escrita, e isolamento cruzado entre organizações) via HTTP de verdade contra
-a API já no ar, imprime `PASS`/`FAIL` por passo, para no primeiro `FAIL`, e
-sempre limpa todo o dado de teste no final (sucesso ou falha) — não deixa
-lixo no banco. Reusar como regressão sempre que mexer em auth, tenant-
-scoping, RLS ou nesses módulos:
+escrita, isolamento cruzado entre organizações, e o vínculo Original/
+Aditivo — Aditivo sem `contratoPaiId` `400`, Aditivo com `contratoPaiId`
+de um Original válido `201`, Aditivo apontando pra outro Aditivo `400`
+com mensagem de encadeamento, Aditivo com `contratoPaiId` de contrato de
+outra organização `400`/`404` nunca `500`, Original com `contratoPaiId`
+preenchido `400`, e os dois `GET` confirmando `contratoPai`/`aditivos`
+populados) via HTTP de verdade contra a API já no ar, imprime `PASS`/
+`FAIL` por passo, para no primeiro `FAIL`, e sempre limpa todo o dado de
+teste no final (sucesso ou falha) — não deixa lixo no banco. Reusar como
+regressão sempre que mexer em auth, tenant-scoping, RLS ou nesses
+módulos:
 
 ```bash
 docker compose exec api npm run smoke:fase2
@@ -848,12 +886,26 @@ componente genérico e configurável:
   validado como enum pela API (`local`, `moedaValorTotal`,
   `modalidadePgtConta*`) viram `<Select>` mesmo assim — orientação de UX/
   qualidade de dado, não uma regra de segurança nova (a API aceita
-  qualquer string não-vazia do mesmo jeito).
+  qualquer string não-vazia do mesmo jeito). Vínculo Original/Aditivo (ver
+  "Vínculo Original/Aditivo" acima): o campo "Tipo de contrato" usa o
+  rótulo "Único" pra `"Original"` (só na tela — o valor salvo continua
+  `"Original"`, `TIPO_CONTRATO_LABELS` em `types.ts`, compartilhado com a
+  tela de detalhe); o campo "Contrato original" só aparece quando
+  "Aditivo" é selecionado (`form.watch("tipoContrato")`), lista só
+  contratos `tipoContrato === "Original"`, e é obrigatório nesse caso via
+  `superRefine` no schema Zod. `contratoFormValuesToPayload` sempre manda
+  `contratoPaiId` explícito (`null` quando "Único", nunca omitido) — é o
+  que permite desvincular um Aditivo existente ao editá-lo de volta pra
+  "Único" (ver o mesmo raciocínio do lado da API).
 - **Detalhe** (`contrato-detail-page.tsx`): mostra os dados com as relações
   já populadas (`importador.nomeRazaoSocial`, `status.nomeStatus`, etc. —
   `GET /contratos/:id` inclui essas relações, ao contrário da listagem).
   Sem tela de exclusão: a API não tem `DELETE /contratos/:id` (contratos
   não são apagáveis, só editáveis — trilha de auditoria fica íntegra).
+  Quando o contrato é um Aditivo, mostra um link pro contrato original
+  (`c.contratoPai`, já populado pela API — sem fetch extra no frontend);
+  quando é Original e tem aditivos vinculados, mostra um card "Aditivos
+  vinculados" com link pra cada um (`c.aditivos`).
 
 **Achado real, corrigido durante a verificação manual**: o mesmo problema
 de `forwardRef` da Fase 1 (ver achado #1 acima) apareceu de novo, agora em
@@ -904,6 +956,24 @@ filtro por status aplicado na lista (refletido na URL) e limpo de volta;
 depois da auditoria, reconfirmado editar/excluir de referência (dialogs) e
 o checkbox do formulário de contrato. Console do navegador sem erros em
 nenhum passo, em nenhuma dessas rodadas.
+
+**Vínculo Original/Aditivo — achado e correção posterior, verificado de
+ponta a ponta num navegador real (Chrome, via claude-in-chrome)**: o
+schema já suportava `tipoContrato`/`contratoPaiId` desde o começo da Fase
+2, mas faltava a regra de negócio amarrando os dois (ver "Vínculo
+Original/Aditivo" na seção "Contratos" acima) — corrigido nesta rodada,
+backend e frontend juntos. Testado criando um contrato "Único"
+(`F5-ORIGINAL-001`) e depois um "Aditivo" vinculado a ele
+(`F5-ADITIVO-001`) pela própria tela: o campo "Contrato original" só
+apareceu depois de selecionar "Aditivo", listou só contratos `Original`;
+a tela de detalhe do Aditivo mostrou o link pro original; a tela de
+detalhe do Original mostrou o card "Aditivos vinculados" com o link de
+volta pro aditivo; e o formulário de edição do Aditivo pré-carregou
+"Tipo de contrato: Aditivo" e "Contrato original: F5-ORIGINAL-001"
+corretamente. Console do navegador sem erros. `smoke-test-fase2.ts`
+estendido com os cenários de validação (ver "Smoke test automatizado
+(Fase 2)" acima); os 7 smoke tests de todas as fases reconfirmados juntos
+depois da mudança, todos `OK` — nenhuma regressão.
 
 ### Fase 3 — módulos setoriais
 

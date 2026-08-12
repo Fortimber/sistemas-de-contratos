@@ -12,6 +12,7 @@ import { AmbientalTab } from "./setores/ambiental-tab";
 import { FinanceiroTab } from "./setores/financeiro-tab";
 import { LogisticaTab } from "./setores/logistica-tab";
 import { ProducaoTab } from "./setores/producao-tab";
+import { TIPO_CONTRATO_LABELS } from "./types";
 
 function formatValor(valor: string, moeda: string): string {
   return `${moeda} ${Number(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -31,25 +32,6 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="text-sm">{value}</dd>
     </div>
-  );
-}
-
-/** Nome do contrato pai (se houver) — GET /contratos/:id não populariza `contratoPai`, só o id; busca à parte. */
-function ContratoPaiField({ contratoPaiId }: { contratoPaiId: string }) {
-  const paiQuery = useContrato(contratoPaiId);
-  return (
-    <Field
-      label="Contrato pai"
-      value={
-        paiQuery.data ? (
-          <Link to={`/contratos/${contratoPaiId}`} className="underline underline-offset-2">
-            {paiQuery.data.numeroContrato}
-          </Link>
-        ) : (
-          "carregando…"
-        )
-      }
-    />
   );
 }
 
@@ -94,7 +76,7 @@ export function ContratoDetailPage() {
         <CardContent>
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label="Status" value={c.status.nomeStatus} />
-            <Field label="Tipo de contrato" value={c.tipoContrato} />
+            <Field label="Tipo de contrato" value={TIPO_CONTRATO_LABELS[c.tipoContrato]} />
             <Field label="Data do contrato" value={formatData(c.dataContrato)} />
             <Field label="Importador" value={`${c.importador.nomeRazaoSocial} (${c.importador.pais})`} />
             <Field label="Representante" value={c.representante.nomeRepresentante} />
@@ -103,10 +85,38 @@ export function ContratoDetailPage() {
             <Field label="Volume (m³)" value={c.volumeM3} />
             <Field label="Quantidade de containers" value={c.qtdContainers} />
             <Field label="Tipo de frete" value={c.tipoFrete} />
-            {c.contratoPaiId && <ContratoPaiField contratoPaiId={c.contratoPaiId} />}
+            {c.contratoPai && (
+              <Field
+                label="Contrato original"
+                value={
+                  <Link to={`/contratos/${c.contratoPai.id}`} className="underline underline-offset-2">
+                    {c.contratoPai.numeroContrato}
+                  </Link>
+                }
+              />
+            )}
           </dl>
         </CardContent>
       </Card>
+
+      {c.aditivos.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Aditivos vinculados</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="grid gap-1.5">
+              {c.aditivos.map((a) => (
+                <li key={a.id}>
+                  <Link to={`/contratos/${a.id}`} className="text-sm underline underline-offset-2">
+                    {a.numeroContrato}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

@@ -47,6 +47,13 @@ async function main() {
   let orgBId = "";
   let importadorBId = "";
 
+  let aditivoId = "";
+  let especieBId = "";
+  let produtoBId = "";
+  let representanteBId = "";
+  let statusBId = "";
+  let contratoBId = "";
+
   const steps: SmokeStep[] = [
     {
       name: "1) Login como admin",
@@ -198,11 +205,179 @@ async function main() {
         );
       },
     },
+    {
+      name: "12) Criar contrato Aditivo SEM contratoPaiId -> 400",
+      run: async () => {
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            tipoContrato: "Aditivo",
+            numeroContrato: `${numeroContrato}-ADITIVO-SEM-PAI`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+          },
+        });
+        assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
+      },
+    },
+    {
+      name: "13) Criar contrato Aditivo com contratoPaiId de um Original válido -> 201",
+      run: async () => {
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            tipoContrato: "Aditivo",
+            contratoPaiId: contratoId,
+            numeroContrato: `${numeroContrato}-ADITIVO-OK`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+          },
+        });
+        assert(status === 201, `esperado 201, veio ${status}: ${JSON.stringify(json)}`);
+        assert(json.contratoPaiId === contratoId, `contratoPaiId esperado "${contratoId}", veio "${json.contratoPaiId}"`);
+        aditivoId = json.id;
+      },
+    },
+    {
+      name: "14) Criar contrato Aditivo apontando para OUTRO Aditivo (não um Original) -> 400, mensagem sobre encadeamento",
+      run: async () => {
+        assert(aditivoId, "precisa do aditivo criado no passo 13");
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            tipoContrato: "Aditivo",
+            contratoPaiId: aditivoId,
+            numeroContrato: `${numeroContrato}-ADITIVO-CHAIN`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+          },
+        });
+        assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
+        assert(
+          /encadeamento|original/i.test(String(json?.message)),
+          `mensagem não deixa claro que é sobre encadeamento/precisar ser Original (veio "${json?.message}")`,
+        );
+      },
+    },
+    {
+      name: "15) Criar contrato Aditivo com contratoPaiId de contrato de OUTRA organização -> erro claro (400/404), não 500",
+      run: async () => {
+        assert(orgBId && importadorBId, "precisa da organização B criada no passo 11");
+
+        // Fixture mínima da organização B pra poder criar um contrato lá
+        // (via Prisma direto — o admin do teste não tem acesso à org B).
+        const especieB = await prisma.especie.create({ data: { organizacaoId: orgBId, nomeEspecie: `Especie B ${runId}` } });
+        especieBId = especieB.id;
+        const produtoB = await prisma.produto.create({
+          data: { organizacaoId: orgBId, nomeProduto: `Produto B ${runId}`, especieId: especieBId },
+        });
+        produtoBId = produtoB.id;
+        const representanteB = await prisma.representante.create({
+          data: { organizacaoId: orgBId, nomeRepresentante: `Representante B ${runId}`, email: `smoke-repb-${runId}@example.com` },
+        });
+        representanteBId = representanteB.id;
+        const statusB = await prisma.statusContrato.create({
+          data: { organizacaoId: orgBId, nomeStatus: `Status B ${runId}`, setorResponsavel: "Comercial", ordem: 1 },
+        });
+        statusBId = statusB.id;
+        const contratoB = await prisma.contrato.create({
+          data: {
+            ...contratoBase,
+            organizacaoId: orgBId,
+            numeroContrato: `${numeroContrato}-ORGB`,
+            dataContrato: new Date(contratoBase.dataContrato),
+            importadorId: importadorBId,
+            representanteId: representanteBId,
+            produtoId: produtoBId,
+            statusId: statusBId,
+          },
+        });
+        contratoBId = contratoB.id;
+
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            tipoContrato: "Aditivo",
+            contratoPaiId: contratoBId,
+            numeroContrato: `${numeroContrato}-ADITIVO-CROSS`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+          },
+        });
+        assert(
+          status === 400 || status === 404,
+          `esperado 400 ou 404 (nunca 500, nunca sucesso), veio ${status}: ${JSON.stringify(json)}`,
+        );
+      },
+    },
+    {
+      name: "16) Criar contrato Original COM contratoPaiId preenchido -> 400",
+      run: async () => {
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            tipoContrato: "Original",
+            contratoPaiId: contratoId,
+            numeroContrato: `${numeroContrato}-ORIGINAL-COM-PAI`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+          },
+        });
+        assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
+      },
+    },
+    {
+      name: "17) GET do Aditivo criado no cenário 13 -> contratoPai populado",
+      run: async () => {
+        const { status, json } = await api("GET", `/contratos/${aditivoId}`, { token: adminToken });
+        assert(status === 200, `esperado 200, veio ${status}: ${JSON.stringify(json)}`);
+        assert(json.contratoPai, "contratoPai não veio populado");
+        assert(json.contratoPai.id === contratoId, `contratoPai.id esperado "${contratoId}", veio "${json.contratoPai.id}"`);
+        assert(
+          json.contratoPai.numeroContrato === numeroContrato,
+          `contratoPai.numeroContrato esperado "${numeroContrato}", veio "${json.contratoPai.numeroContrato}"`,
+        );
+      },
+    },
+    {
+      name: "18) GET do Original correspondente -> lista de aditivos aparece, incluindo o criado no cenário 13",
+      run: async () => {
+        const { status, json } = await api("GET", `/contratos/${contratoId}`, { token: adminToken });
+        assert(status === 200, `esperado 200, veio ${status}: ${JSON.stringify(json)}`);
+        assert(Array.isArray(json.aditivos), "aditivos não veio como array");
+        const found = (json.aditivos as Array<{ id: string }>).some((a) => a.id === aditivoId);
+        assert(found, `aditivo ${aditivoId} não apareceu na lista "aditivos" do contrato original`);
+      },
+    },
   ];
 
   const result = await runSmokeSteps(steps, async () => {
+    // limparFixture já apaga TODOS os contratos com prefixo numeroContrato
+    // (inclui o Original, os Aditivos dos passos 12-16 E o contratoB do
+    // passo 15, que usa o mesmo prefixo) — precisa rodar ANTES de apagar
+    // produtoB/representanteB/statusB/especieB abaixo, que o contratoB
+    // referencia via FK.
     await limparFixture(prisma, numeroContrato, { produtoId, especieId, importadorId, representanteId, statusId });
     if (operacionalUserId) await prisma.usuario.deleteMany({ where: { id: operacionalUserId } });
+    if (produtoBId) await prisma.produto.deleteMany({ where: { id: produtoBId } });
+    if (especieBId) await prisma.especie.deleteMany({ where: { id: especieBId } });
+    if (representanteBId) await prisma.representante.deleteMany({ where: { id: representanteBId } });
+    if (statusBId) await prisma.statusContrato.deleteMany({ where: { id: statusBId } });
     if (importadorBId) await prisma.importador.deleteMany({ where: { id: importadorBId } });
     if (orgBId) await prisma.organizacao.deleteMany({ where: { id: orgBId } });
   });
