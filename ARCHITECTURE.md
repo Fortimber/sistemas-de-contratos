@@ -27,6 +27,7 @@ Decisão de escopo (confirmada): **single-tenant em produção agora, schema mul
 - Toda query de aplicação filtra por `organizacao_id` do usuário autenticado — feito via middleware central, nunca manual por rota (elimina o risco de "esqueci o WHERE").
 - Postgres Row-Level Security (RLS) habilitado como segunda camada de proteção: mesmo que uma query da aplicação esqueça o filtro, o banco recusa a leitura de dado de outra organização. **Isso é defesa em profundidade — não confiar só na disciplina do código de aplicação.**
 - Hoje: uma única linha em `organizacoes` (sua empresa), criada via seed. Não requer fluxo de onboarding de tenant ainda — isso só é construído se/quando a decisão de vender avançar.
+- **Modelo de venda futura confirmado: Modelo A — instância única compartilhada** (não cópia separada por cliente). Vender para um cliente novo significa criar uma nova linha em `organizacoes`, sem deploy novo, sem VM/banco separado. Decisão tomada considerando: o RLS já construído foi pensado exatamente para isso; clientes futuros previstos são do mesmo setor (baixa chance de exigir regra de negócio muito divergente por cliente); não há equipe de infraestrutura para manter N cópias do sistema. Ver seção 12 para o desenho de integrações plugáveis por cliente dentro desse modelo.
 
 ## 4. Modelo de dados
 
@@ -40,6 +41,7 @@ Ver `schema.prisma` anexo — é o schema completo, pronto para `prisma migrate 
 - **auditoria_contratos** — trilha de auditoria campo-a-campo (append-only)
 - **anexos_contrato** — arquivos vinculados ao contrato (PDF/imagem, com tipo_documento)
 - **detalhes_producao / detalhes_ambiental / detalhes_logistica / detalhes_financeiro** — extensões 1:1 de `contratos`, uma por setor (mesma separação de responsabilidade do sistema original — cada setor só escreve na sua tabela)
+- **refresh_tokens** — sessões ativas por usuário (jti do JWT, expiração, revogação). Adicionada durante a Fase 1 ao identificar que refresh token puramente stateless não permite logout real nem revogação em caso de desligamento/perda de dispositivo. Permite também listar sessões ativas por usuário.
 
 Tabelas append-only (`historico_status_contrato`, `auditoria_contratos`) devem ter `UPDATE`/`DELETE` bloqueados a nível de permissão de banco (role da aplicação sem grant de update/delete nessas tabelas) — replica a proteção que já existia nas regras do PocketBase (`updateRule: null, deleteRule: null`).
 
@@ -117,7 +119,25 @@ docker compose exec api npx prisma migrate deploy
 - Deploy manual (os 5 passos acima) nas primeiras vezes, até o processo estar bem entendido — só então vale automatizar com GitHub Actions (push na `main` → deploy automático). Automatizar cedo demais tende a esconder problema, não evitar.
 - Rollback: `git checkout` do commit anterior + `docker compose up --build -d` de novo — funciona porque tudo (código e schema) é versionado.
 
-## 9. Prompt inicial sugerido para o Claude Code
+## 10. Regras de negócio pendentes — rastreamento por área
+
+Checklist vivo, atualizado a cada rodada de revisão. Cada item nasceu de
+uma decisão consciente de "não inventar regra sem confirmação" durante a
+construção — agora é hora de fechar cada um com a informação real do
+negócio.
+
+| Área | Pendência | Status |
+|---|---|---|
+| Referências (`status_contrato`) | Campo `ordem` aceita valores duplicados entre status diferentes — sem validação de unicidade por organização | ⏳ Pendente |
+| Logística | Nenhuma validação de ordem cronológica entre os 9 campos de data (prancha, draft, coleta de container, embarque, entrada no destino, etc.) | ⏳ Pendente |
+| Logística | Não existe perfil de acesso dedicado — usa `Operacional` por aproximação | ⏳ Pendente (aguardando decisão de responsabilidade por setor/pessoa) |
+| Financeiro | `statusEmbarqueXCambio`, `statusGeralCambio`, `formaPagamento` — texto livre, sem lista fixa de valores | ⏳ Pendente |
+| Financeiro | `comissaoSobreVenda = true` não exige `valorComissaoReais`/`valorComissaoDolar` preenchido | ⏳ Pendente |
+| Ambiental | (revisar na prática, tela por tela — nenhuma pendência registrada até aqui) | ✅ A confirmar |
+| Produção | (revisar na prática, tela por tela — nenhuma pendência registrada até aqui) | ✅ A confirmar |
+| Contratos | (revisar na prática, tela por tela — nenhuma pendência registrada até aqui) | ✅ A confirmar |
+
+## 11. Prompt inicial sugerido para o Claude Code
 
 Ao abrir o Claude Code na VM (com este repositório e o `schema.prisma` já dentro dele), um bom primeiro prompt:
 
@@ -135,3 +155,17 @@ quero revisar a Fase 0 rodando antes de continuar.
 ```
 
 Isso mantém você no controle do ritmo, revisando fase por fase, em vez de pedir "constrói tudo" de uma vez — mais seguro para quem está aprendendo backend junto com o projeto.
+
+## 12. Fase 8 (futura) — Integrações plugáveis por cliente
+
+Registrado para quando a venda a outros clientes avançar de verdade — nenhuma ação necessária agora. Contexto: no Modelo A (seção 3), diferentes clientes podem precisar de diferentes integrações de terceiro (ex: um cliente usa Omie, outro usa Conta Azul, para lançamento automático de nota fiscal).
+
+**Padrão de arquitetura:** Adapter/Strategy — o sistema não conhece "Omie" diretamente, conhece uma interface genérica (`IntegracaoContabil`), com uma implementação por provedor (`OmieAdapter`, `ContaAzulAdapter`). O restante do sistema chama a interface, não o provedor específico.
+
+**Schema necessário (não existe ainda):** tabela `organizacao_integracoes` — `organizacaoId`, `tipo` (ex: "contabil"), `provedor` (ex: "omie"/"conta_azul"), credenciais, `ativo`. Mesma ideia de "feature flag por organização", com um campo a mais dizendo qual provedor.
+
+**Cuidado de segurança específico, não coberto pelo RLS:** credenciais de terceiros (chave de API de cada cliente) guardadas nessa tabela precisam de **criptografia em repouso** — RLS protege quem vê qual linha, não protege um dump bruto do banco ou acesso administrativo amplo. Mesmo cuidado que já tivemos com `PB_ENCRYPTION_KEY` na era PocketBase, agora aplicado a segredo de terceiro dentro do próprio sistema.
+
+**Identificação de webhook por cliente:** já que Omie/Conta Azul não sabem o que é uma "organização" do seu sistema, a URL do webhook precisa identificar o cliente e ter um token secreto próprio por organização: `POST /integracoes/{provedor}/webhook/{organizacaoId}/{token-secreto}`.
+
+**Primeiro candidato concreto:** integração com Omie (empresa já usa hoje para lançar notas fiscais) — ideia original discutida: quando uma NF-e é emitida no Omie, um webhook popula automaticamente os campos correspondentes em `detalhes_financeiro`, com confirmação manual do Financeiro antes de virar oficial (não sobrescrever automaticamente sem revisão, dado o peso do dado financeiro).
