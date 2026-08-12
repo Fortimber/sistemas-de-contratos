@@ -143,6 +143,8 @@ export function ContratoDetailPage() {
             <Field label="Certificação de processo de origem" value={formatBooleano(c.certificacaoProcessoOrigem)} />
             <Field label="Requer CITES" value={formatBooleano(c.requerCites)} />
             <Field label="Requer FSC" value={formatBooleano(c.requerFsc)} />
+            <Field label="Requer certificado fitossanitário" value={formatBooleano(c.requerCertificadoFitossanitario)} />
+            <Field label="Requer certificado Kiln Dried" value={formatBooleano(c.requerCertificadoKilnDried)} />
           </dl>
         </CardContent>
       </Card>

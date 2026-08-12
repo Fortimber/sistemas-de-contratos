@@ -29,6 +29,9 @@ const contratoFields = {
   certificacaoProcessoOrigem: { type: "boolean" },
   requerCites: { type: "boolean" },
   requerFsc: { type: "boolean" },
+  requerCertificadoFitossanitario: { type: "boolean" },
+  // "Certificate of Kiln Dried Timber"
+  requerCertificadoKilnDried: { type: "boolean" },
   // Decimal no banco (ver schema.prisma) — mesma decisão de precisão
   // monetária da Fase 3/Financeiro, aplicada aqui de forma consistente.
   comissaoPct: { type: "number", minimum: 0 },
@@ -110,6 +113,8 @@ interface ContratoFields {
   certificacaoProcessoOrigem: boolean;
   requerCites: boolean;
   requerFsc: boolean;
+  requerCertificadoFitossanitario: boolean;
+  requerCertificadoKilnDried: boolean;
   comissaoPct: number;
   comissaoMetragem: number;
   valorTotalUsd: number;

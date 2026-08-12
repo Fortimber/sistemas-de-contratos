@@ -49,6 +49,8 @@ const contratoFormSchema = z.object({
   certificacaoProcessoOrigem: z.boolean(),
   requerCites: z.boolean(),
   requerFsc: z.boolean(),
+  requerCertificadoFitossanitario: z.boolean(),
+  requerCertificadoKilnDried: z.boolean(),
   comissaoPct: z.string().optional(),
   comissaoMetragem: z.string().optional(),
   valorTotalUsd: z.coerce.number({ message: "Informe o valor total." }).min(0, "O valor total não pode ser negativo."),
@@ -90,6 +92,8 @@ export const CONTRATO_FORM_DEFAULT_VALUES: ContratoFormValues = {
   certificacaoProcessoOrigem: false,
   requerCites: false,
   requerFsc: false,
+  requerCertificadoFitossanitario: false,
+  requerCertificadoKilnDried: false,
   comissaoPct: "",
   comissaoMetragem: "",
   valorTotalUsd: 0,
@@ -151,6 +155,8 @@ export function contratoToFormValues(c: Contrato): ContratoFormValues {
     certificacaoProcessoOrigem: c.certificacaoProcessoOrigem,
     requerCites: c.requerCites,
     requerFsc: c.requerFsc,
+    requerCertificadoFitossanitario: c.requerCertificadoFitossanitario,
+    requerCertificadoKilnDried: c.requerCertificadoKilnDried,
     comissaoPct: c.comissaoPct ?? "",
     comissaoMetragem: c.comissaoMetragem ?? "",
     valorTotalUsd: Number(c.valorTotalUsd),
@@ -636,6 +642,8 @@ export function ContratoForm({
               ["certificacaoProcessoOrigem", "Certificação de processo de origem"],
               ["requerCites", "Requer CITES"],
               ["requerFsc", "Requer FSC"],
+              ["requerCertificadoFitossanitario", "Requer certificado fitossanitário"],
+              ["requerCertificadoKilnDried", "Requer certificado Kiln Dried"],
             ] as const
           ).map(([name, label]) => (
             <FormField

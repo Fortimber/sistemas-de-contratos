@@ -347,6 +347,8 @@ os opcionais indicados):
   "certificacaoProcessoOrigem": false,// opcional, default false
   "requerCites": false,               // opcional, default false
   "requerFsc": false,                 // opcional, default false
+  "requerCertificadoFitossanitario": false, // opcional, default false
+  "requerCertificadoKilnDried": false,      // opcional, default false — "Certificate of Kiln Dried Timber"
   "comissaoPct": 2.5,                 // opcional
   "comissaoMetragem": 10,             // opcional
   "valorTotalUsd": 45000,
@@ -404,16 +406,22 @@ dois, adicionada nesta rodada (`contratos.service.ts`,
 
 ### Smoke test automatizado (Fase 2)
 
-`apps/api/scripts/smoke-test-fase2.ts` roda os 18 cenários acima (criação
+`apps/api/scripts/smoke-test-fase2.ts` roda os 20 cenários acima (criação
 das referências, contrato, listagem, filtro, edição, número duplicado,
 exclusão de referência em uso, usuário `Operacional` sem permissão de
-escrita, isolamento cruzado entre organizações, e o vínculo Original/
+escrita, isolamento cruzado entre organizações, o vínculo Original/
 Aditivo — Aditivo sem `contratoPaiId` `400`, Aditivo com `contratoPaiId`
 de um Original válido `201`, Aditivo apontando pra outro Aditivo `400`
 com mensagem de encadeamento, Aditivo com `contratoPaiId` de contrato de
 outra organização `400`/`404` nunca `500`, Original com `contratoPaiId`
 preenchido `400`, e os dois `GET` confirmando `contratoPai`/`aditivos`
-populados) via HTTP de verdade contra a API já no ar, imprime `PASS`/
+populados —, e os dois certificados booleanos mais recentes
+(`requerCertificadoFitossanitario`/`requerCertificadoKilnDried`):
+criação com os dois marcados, edição desmarcando os dois, e confirmação
+de que as duas mudanças aparecem em `auditoria_contratos` automaticamente
+via `middleware/audit-logger.ts` — sem nenhum código novo nesse
+middleware, prova de que a extension captura qualquer campo por conta
+própria) via HTTP de verdade contra a API já no ar, imprime `PASS`/
 `FAIL` por passo, para no primeiro `FAIL`, e sempre limpa todo o dado de
 teste no final (sucesso ou falha) — não deixa lixo no banco. Reusar como
 regressão sempre que mexer em auth, tenant-scoping, RLS ou nesses

@@ -203,6 +203,9 @@ model Contrato {
   certificacaoProcessoOrigem     Boolean        @default(false) @map("certificacao_processo_origem")
   requerCites                    Boolean        @default(false) @map("requer_cites")
   requerFsc                      Boolean        @default(false) @map("requer_fsc")
+  requerCertificadoFitossanitario Boolean       @default(false) @map("requer_certificado_fitossanitario")
+  // "Certificate of Kiln Dried Timber"
+  requerCertificadoKilnDried     Boolean        @default(false) @map("requer_certificado_kiln_dried")
 
   // Decimal (não Float) por precisão monetária — ver DetalhesFinanceiro.
   comissaoPct                    Decimal?       @map("comissao_pct") @db.Decimal(5, 2)

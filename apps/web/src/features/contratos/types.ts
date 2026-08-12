@@ -40,6 +40,9 @@ interface ContratoBase {
   certificacaoProcessoOrigem: boolean;
   requerCites: boolean;
   requerFsc: boolean;
+  requerCertificadoFitossanitario: boolean;
+  /** "Certificate of Kiln Dried Timber" */
+  requerCertificadoKilnDried: boolean;
   comissaoPct: string | null;
   comissaoMetragem: string | null;
   valorTotalUsd: string;

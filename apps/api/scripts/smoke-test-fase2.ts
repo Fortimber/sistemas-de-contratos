@@ -48,6 +48,7 @@ async function main() {
   let importadorBId = "";
 
   let aditivoId = "";
+  let certificadosContratoId = "";
   let especieBId = "";
   let produtoBId = "";
   let representanteBId = "";
@@ -362,6 +363,64 @@ async function main() {
         assert(Array.isArray(json.aditivos), "aditivos não veio como array");
         const found = (json.aditivos as Array<{ id: string }>).some((a) => a.id === aditivoId);
         assert(found, `aditivo ${aditivoId} não apareceu na lista "aditivos" do contrato original`);
+      },
+    },
+    {
+      name: "19) Criar contrato com requerCertificadoFitossanitario/requerCertificadoKilnDried marcados -> 201, campos batem",
+      run: async () => {
+        const { status, json } = await api("POST", "/contratos", {
+          token: adminToken,
+          body: {
+            ...contratoBase,
+            numeroContrato: `${numeroContrato}-CERTIFICADOS`,
+            importadorId,
+            representanteId,
+            produtoId,
+            statusId,
+            requerCertificadoFitossanitario: true,
+            requerCertificadoKilnDried: true,
+          },
+        });
+        assert(status === 201, `esperado 201, veio ${status}: ${JSON.stringify(json)}`);
+        assert(json.requerCertificadoFitossanitario === true, `requerCertificadoFitossanitario esperado true, veio ${json.requerCertificadoFitossanitario}`);
+        assert(json.requerCertificadoKilnDried === true, `requerCertificadoKilnDried esperado true, veio ${json.requerCertificadoKilnDried}`);
+        certificadosContratoId = json.id;
+      },
+    },
+    {
+      name: "20) Editar (PATCH) desmarcando os dois certificados -> valores atualizam e aparecem na auditoria",
+      run: async () => {
+        assert(certificadosContratoId, "precisa do contrato criado no passo 19");
+        const { status, json } = await api("PATCH", `/contratos/${certificadosContratoId}`, {
+          token: adminToken,
+          body: { requerCertificadoFitossanitario: false, requerCertificadoKilnDried: false },
+        });
+        assert(status === 200, `esperado 200, veio ${status}: ${JSON.stringify(json)}`);
+        assert(json.requerCertificadoFitossanitario === false, `requerCertificadoFitossanitario esperado false, veio ${json.requerCertificadoFitossanitario}`);
+        assert(json.requerCertificadoKilnDried === false, `requerCertificadoKilnDried esperado false, veio ${json.requerCertificadoKilnDried}`);
+
+        // Confirma que middleware/audit-logger.ts capturou os 2 campos
+        // automaticamente (Object.keys(after) genérico, sem lista de campos
+        // fixa) — sem precisar de nenhum código novo em auditoria-contratos.
+        const fitossanitarioRow = await prisma.auditoriaContrato.findFirst({
+          where: { contratoId: certificadosContratoId, campoAlterado: "requerCertificadoFitossanitario" },
+          orderBy: { dataHora: "desc" },
+        });
+        assert(fitossanitarioRow, "nenhuma linha de auditoria pra campoAlterado=requerCertificadoFitossanitario");
+        assert(
+          fitossanitarioRow!.valorAnterior === "true" && fitossanitarioRow!.valorNovo === "false",
+          `auditoria de requerCertificadoFitossanitario não bateu (anterior="${fitossanitarioRow!.valorAnterior}", novo="${fitossanitarioRow!.valorNovo}")`,
+        );
+
+        const kilnDriedRow = await prisma.auditoriaContrato.findFirst({
+          where: { contratoId: certificadosContratoId, campoAlterado: "requerCertificadoKilnDried" },
+          orderBy: { dataHora: "desc" },
+        });
+        assert(kilnDriedRow, "nenhuma linha de auditoria pra campoAlterado=requerCertificadoKilnDried");
+        assert(
+          kilnDriedRow!.valorAnterior === "true" && kilnDriedRow!.valorNovo === "false",
+          `auditoria de requerCertificadoKilnDried não bateu (anterior="${kilnDriedRow!.valorAnterior}", novo="${kilnDriedRow!.valorNovo}")`,
+        );
       },
     },
   ];
