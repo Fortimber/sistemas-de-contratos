@@ -11,6 +11,7 @@ import { ProdutosPage } from "@/features/referencias/produtos-page";
 import { RepresentantesPage } from "@/features/referencias/representantes-page";
 import { StatusContratoPage } from "@/features/referencias/status-contrato-page";
 import { LoginPage } from "@/pages/login-page";
+import { TrocarSenhaPage } from "@/pages/trocar-senha-page";
 import { ProtectedRoute, PublicOnlyRoute } from "@/routes/route-guards";
 
 function App() {
@@ -22,6 +23,8 @@ function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/contratos" replace />} />
+
+          <Route path="/trocar-senha" element={<TrocarSenhaPage />} />
 
           <Route path="/contratos" element={<ContratosListPage />} />
           <Route path="/contratos/novo" element={<ContratoCreatePage />} />

@@ -3,6 +3,7 @@ import { authenticate } from "../middleware/auth.js";
 import { attachTenantScope, releaseTenantScope } from "../middleware/tenant-scoping.js";
 import { meRoutes } from "../modules/auth/me.routes.js";
 import { logoutRoutes } from "../modules/auth/logout.routes.js";
+import { senhaRoutes } from "../modules/auth/senha.routes.js";
 import { especiesRoutes } from "../modules/especies/especies.routes.js";
 import { produtosRoutes } from "../modules/produtos/produtos.routes.js";
 import { importadoresRoutes } from "../modules/importadores/importadores.routes.js";
@@ -35,6 +36,7 @@ export async function protectedContext(app: FastifyInstance) {
 
   await app.register(meRoutes);
   await app.register(logoutRoutes);
+  await app.register(senhaRoutes);
 
   // Fase 2 — tabelas de referência + entidade central de contratos.
   await app.register(especiesRoutes);

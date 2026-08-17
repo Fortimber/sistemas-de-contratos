@@ -1,4 +1,4 @@
-import { LogOut } from "lucide-react";
+import { KeyRound, LogOut } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
@@ -58,10 +58,18 @@ export function Sidebar() {
             {user.nomeCompleto}
           </p>
         )}
-        <Button variant="outline" size="sm" className="w-full justify-start gap-2" onClick={handleLogout}>
-          <LogOut className="size-4" />
-          Sair
-        </Button>
+        <div className="grid gap-1.5">
+          <Button variant="outline" size="sm" className="w-full justify-start gap-2" asChild>
+            <NavLink to="/trocar-senha">
+              <KeyRound className="size-4" />
+              Alterar senha
+            </NavLink>
+          </Button>
+          <Button variant="outline" size="sm" className="w-full justify-start gap-2" onClick={handleLogout}>
+            <LogOut className="size-4" />
+            Sair
+          </Button>
+        </div>
       </div>
     </aside>
   );

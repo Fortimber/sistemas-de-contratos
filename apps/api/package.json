@@ -18,7 +18,8 @@
     "smoke:fase4": "tsx scripts/smoke-test-fase4.ts",
     "smoke:eventos-pagamento": "tsx scripts/smoke-test-eventos-pagamento.ts",
     "smoke:itens-contrato": "tsx scripts/smoke-test-itens-contrato.ts",
-    "smoke:fase1-cookie-auth": "tsx scripts/smoke-test-fase1-cookie-auth.ts"
+    "smoke:fase1-cookie-auth": "tsx scripts/smoke-test-fase1-cookie-auth.ts",
+    "smoke:troca-senha": "tsx scripts/smoke-test-troca-senha.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

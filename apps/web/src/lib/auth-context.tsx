@@ -25,6 +25,17 @@ interface AuthContextValue {
   user: Usuario | null;
   login: (loginInput: string, senha: string) => Promise<void>;
   logout: () => Promise<void>;
+  /**
+   * Limpa a sessão só localmente, sem chamar POST /auth/logout — usada
+   * depois de uma troca de senha bem-sucedida (PATCH /auth/senha), que já
+   * revoga a sessão (e limpa a cookie de refresh) do lado do servidor. Uma
+   * chamada a `logout()` ali reusaria uma cookie que a API já descartou,
+   * disparando o fluxo de refresh automático do api-client (ver
+   * apiRequest em api-client.ts) e um redirect via window.location no meio
+   * do caminho — que atropelaria o `navigate("/login", { state })` da
+   * própria tela de troca de senha antes dele rodar.
+   */
+  clearSession: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -94,7 +105,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus("unauthenticated");
   }
 
-  return <AuthContext.Provider value={{ status, user, login, logout }}>{children}</AuthContext.Provider>;
+  function clearSession(): void {
+    setAccessToken(null);
+    setUser(null);
+    setStatus("unauthenticated");
+  }
+
+  return (
+    <AuthContext.Provider value={{ status, user, login, logout, clearSession }}>{children}</AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {

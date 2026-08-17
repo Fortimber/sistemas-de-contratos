@@ -137,6 +137,43 @@ mesmo essa nunca tendo sido comprometida, porque não há como distinguir
 "dono legítimo tentando reusar por engano" de "atacante com o token antigo"
 depois que a rotação já aconteceu uma vez.
 
+## Troca de senha
+
+`PATCH /auth/senha` (rota protegida — exige `accessToken`) permite ao
+próprio usuário trocar a senha. Fecha um gap que ficou pendente desde a
+Fase 1 do frontend: `usuario.deveTrocarSenha` sempre existiu no dado do
+usuário (setado no seed/criação, ver `apps/api/prisma/seed.ts`), mas não
+tinha endpoint nem tela até aqui.
+
+```bash
+curl -s -i http://localhost:3000/auth/senha \
+  -X PATCH \
+  -H "Authorization: Bearer <accessToken>" \
+  -H "Content-Type: application/json" \
+  -d '{"senhaAtual":"troque-esta-senha","novaSenha":"uma-senha-nova-boa"}'
+# -> 204 No Content, com Set-Cookie limpando refreshToken (Max-Age=0)
+```
+
+Regras:
+
+- **Validação de `novaSenha`** (`400` com mensagem clara se violar): mínimo
+  8 caracteres, e precisa ser diferente de `senhaAtual`.
+- **`senhaAtual` incorreta -> `401` genérico** (`"Senha atual inválida."`)
+  — checado via `bcrypt.compare` contra o hash salvo, mesma filosofia do
+  `POST /auth/login` (`auth.service.ts`): a validação de forma de
+  `novaSenha` acontece **antes** de checar `senhaAtual`, então essa ordem
+  (`400` de forma primeiro, `401` de credencial depois) é a mesma usada
+  pela rota.
+- **Sucesso revoga TODAS as sessões ativas do usuário** — mesmo mecanismo
+  de `refresh_tokens.revogado_em` usado na detecção de reuso de token
+  acima —, **inclusive a sessão que fez a troca**: a cookie de refresh
+  token da resposta vem limpa (`Max-Age=0`), igual ao logout. Qualquer
+  outro dispositivo/aba com sessão aberta perde acesso na próxima tentativa
+  de `/auth/refresh` (`401`). É intencional: uma troca de senha deveria
+  invalidar qualquer sessão aberta em outro lugar, não só proteger a que
+  fez a troca.
+- Sucesso também zera `usuario.deveTrocarSenha` (se estava `true`).
+
 ### Smoke test automatizado (Fase 1)
 
 `apps/api/scripts/smoke-test-fase1-cookie-auth.ts` cobre o fluxo de
@@ -151,6 +188,26 @@ precise.
 
 ```bash
 docker compose exec api npm run smoke:fase1-cookie-auth
+```
+
+### Smoke test automatizado (troca de senha)
+
+`apps/api/scripts/smoke-test-troca-senha.ts` cobre `PATCH /auth/senha` de
+ponta a ponta: senha atual errada (`401`), nova senha curta demais (`400`),
+nova senha igual à atual (`400`), troca bem-sucedida (`204` +
+`deveTrocarSenha` vira `false` no banco), a sessão que fez a troca perdendo
+acesso (`refresh` com o token de antes vira `401` — prova de que **todas**
+as sessões foram revogadas, não só as outras), e por fim login com a senha
+nova funcionando e com a antiga não. É o único smoke test que muda de
+verdade a senha do admin seedado — por isso, ao contrário dos outros
+(que só criam dado próprio e não geram lixo), a limpeza deste script
+**reverte a senha pro valor original** (`SEED_ADMIN_SENHA`) e restaura o
+`deveTrocarSenha` de antes; roda sempre, mesmo se algum passo falhar antes
+da troca acontecer — senão todo smoke test seguinte (todos fazem login como
+admin) quebraria.
+
+```bash
+docker compose exec api npm run smoke:troca-senha
 ```
 
 ## Testando RLS (Fase 1)
@@ -888,14 +945,15 @@ mesmo formato). Limpa tudo no final, sucesso ou falha.
 docker compose exec api npm run smoke:itens-contrato
 ```
 
-Com tudo isso no ar, os 9 smoke tests (`fase1-cookie-auth`, `fase2`,
-`fase3-producao`, `fase3-ambiental`, `fase3-logistica`,
+Com tudo isso no ar, os 10 smoke tests (`fase1-cookie-auth`, `troca-senha`,
+`fase2`, `fase3-producao`, `fase3-ambiental`, `fase3-logistica`,
 `fase3-financeiro`, `fase4`, `eventos-pagamento`, `itens-contrato`) devem
 ser reconfirmados juntos sempre que houver mudança de schema ou nos
 módulos compartilhados:
 
 ```bash
 docker compose exec api npm run smoke:fase1-cookie-auth && \
+docker compose exec api npm run smoke:troca-senha && \
 docker compose exec api npm run smoke:fase2 && \
 docker compose exec api npm run smoke:fase3-producao && \
 docker compose exec api npm run smoke:fase3-ambiental && \
@@ -1041,12 +1099,42 @@ docker compose up -d web
 - **Logout**: botão na sidebar (`src/components/layout/sidebar.tsx`),
   chama `POST /auth/logout`, limpa o estado em memória e manda pra
   `/login`.
-- **Pendente de propósito**: tela de troca de senha obrigatória
-  (`usuario.deveTrocarSenha` já vem da API, mas ainda não tem UI).
+- **Troca de senha** (`src/pages/trocar-senha-page.tsx`, rota
+  `/trocar-senha`): uma página só pros dois fluxos —
+  - **Obrigatório**: `ProtectedRoute` (`route-guards.tsx`) redireciona pra
+    `/trocar-senha` em qualquer rota protegida sempre que
+    `user.deveTrocarSenha === true` — não precisa de exceção pro logout
+    porque o botão de sair vive na sidebar, fora do `<Outlet />` que o
+    guard controla (`app-layout.tsx`), então continua clicável mesmo com
+    o conteúdo preso ali.
+  - **Voluntário**: link "Alterar senha" na sidebar, disponível pra
+    qualquer usuário logado a qualquer momento (mesma página/formulário).
+  - Formulário (React Hook Form + Zod): senha atual, nova senha, confirmar
+    nova senha — o schema Zod garante que as duas últimas coincidem antes
+    mesmo de chamar a API. `PATCH /auth/senha` revoga todas as sessões do
+    usuário (inclusive a atual, ver seção "Troca de senha" acima), então
+    não há sessão pra continuar depois de um `204`: `clearSession()`
+    (`auth-context.tsx`) limpa o estado local **sem** chamar
+    `POST /auth/logout` (que reusaria uma cookie que a API já descartou e
+    disparia o fluxo de refresh automático do `api-client.ts`), e a página
+    redireciona pra `/login` com uma mensagem de sucesso.
 
-**Achado real, corrigido durante a verificação manual** — duas coisas que
-só apareceram testando de ponta a ponta num navegador de verdade, não lendo
-o código:
+**Achado real, corrigido durante a verificação manual no navegador**: a
+mensagem de sucesso ("Senha alterada com sucesso...") tentou usar primeiro
+`navigate("/login", { state: { message } })` — funcionou lendo o código,
+mas sumia sempre testando de verdade no navegador. Causa: `clearSession()`
+muda `status` pra `"unauthenticated"`, o que faz `ProtectedRoute` (ainda
+montado por mais um instante, ver acima) **também** tentar navegar sozinho
+pra `/login` — só que com `<Navigate to="/login" replace />` **sem**
+`state` nenhum. Qual das duas navegações "vence" a corrida de re-render é
+timing interno do React/react-router, não algo pra depender. Corrigido
+guardando a mensagem em `sessionStorage` antes de `clearSession()` (não no
+`state` da navegação) — `login-page.tsx` lê e limpa a chave no mount; não
+depende de qual navegação chega primeiro.
+
+**Achado real, corrigido durante a verificação manual** — coisas que só
+apareceram testando de ponta a ponta num navegador de verdade, não lendo o
+código:
 
 1. **`Function components cannot be given refs`** no console: o
    `Input` gerado pelo preset `radix-nova` do shadcn CLI é um function
@@ -1524,15 +1612,15 @@ apps/api/
                    # detalhes-financeiro, historico-status-contrato, auditoria-contratos,
                    # itens-contrato)
     plugins/      # protected-context (hooks centrais de auth+tenant-scoping)
-  scripts/        # smoke tests por fase (smoke-test-fase1-cookie-auth.ts, smoke-test-fase2.ts,
-                   # smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
+  scripts/        # smoke tests por fase (smoke-test-fase1-cookie-auth.ts, smoke-test-troca-senha.ts,
+                   # smoke-test-fase2.ts, smoke-test-fase3-producao.ts, smoke-test-fase3-ambiental.ts,
                    # smoke-test-fase3-logistica.ts, smoke-test-fase3-financeiro.ts,
                    # smoke-test-fase4.ts, smoke-test-eventos-pagamento.ts,
                    # smoke-test-itens-contrato.ts)
 apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção "Frontend" acima
   src/
     components/
-      layout/     # AppLayout, Sidebar (navegação + logout)
+      layout/     # AppLayout, Sidebar (navegação + alterar senha + logout)
       ui/         # componentes shadcn/ui (button, input, label, card, table, select, dialog, form, checkbox, tabs)
       full-page-loading.tsx  # estado de carregamento (boot da sessão)
       pagination-controls.tsx # Anterior/Próxima — reusado por referências, contratos e histórico/auditoria
@@ -1560,7 +1648,7 @@ apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção 
                    # (AuthProvider/useAuth), permissions (canWriteReferences, canWriteSector,
                    # canWriteEventosPagamento, canViewAuditoria), pagination (types
                    # Paginated/PaginationMeta), query-client (TanStack Query), utils (cn)
-    pages/        # login-page.tsx
+    pages/        # login-page.tsx, trocar-senha-page.tsx
     routes/       # route-guards (ProtectedRoute, PublicOnlyRoute)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)
 ```

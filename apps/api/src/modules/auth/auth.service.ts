@@ -113,6 +113,43 @@ export async function logout(refreshToken: string, usuarioId: string): Promise<v
   });
 }
 
+/**
+ * Troca de senha de um usuário já autenticado. Reusa `InvalidCredentialsError`
+ * pro caso de `senhaAtual` não bater — mesma filosofia do `login`: a rota
+ * (`senha.routes.ts`) devolve uma mensagem genérica, sem detalhar por que a
+ * senha atual foi rejeitada.
+ *
+ * Sucesso revoga TODAS as sessões ativas do usuário (mesmo mecanismo de
+ * `refresh` acima pra reuso de token detectado) — inclusive a sessão atual,
+ * de propósito: uma troca de senha é o tipo de evento que deveria invalidar
+ * qualquer sessão aberta em outro lugar (dispositivo roubado, sessão vazada
+ * etc.), não só proteger a sessão que fez a troca.
+ */
+export async function alterarSenha(usuarioId: string, senhaAtual: string, novaSenha: string): Promise<void> {
+  const usuario = await prisma.usuario.findUnique({ where: { id: usuarioId } });
+  if (!usuario) {
+    throw new InvalidCredentialsError();
+  }
+
+  const senhaValida = await bcrypt.compare(senhaAtual, usuario.senhaHash);
+  if (!senhaValida) {
+    throw new InvalidCredentialsError();
+  }
+
+  const novoHash = await bcrypt.hash(novaSenha, 10);
+
+  await prisma.$transaction([
+    prisma.usuario.update({
+      where: { id: usuarioId },
+      data: { senhaHash: novoHash, deveTrocarSenha: false },
+    }),
+    prisma.refreshToken.updateMany({
+      where: { usuarioId, revogadoEm: null },
+      data: { revogadoEm: new Date() },
+    }),
+  ]);
+}
+
 async function issueTokens(usuario: Usuario, meta: RequestMeta): Promise<TokenResponse> {
   const accessToken = signAccessToken({
     sub: usuario.id,
