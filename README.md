@@ -198,13 +198,25 @@ nova senha igual à atual (`400`), troca bem-sucedida (`204` +
 `deveTrocarSenha` vira `false` no banco), a sessão que fez a troca perdendo
 acesso (`refresh` com o token de antes vira `401` — prova de que **todas**
 as sessões foram revogadas, não só as outras), e por fim login com a senha
-nova funcionando e com a antiga não. É o único smoke test que muda de
-verdade a senha do admin seedado — por isso, ao contrário dos outros
-(que só criam dado próprio e não geram lixo), a limpeza deste script
-**reverte a senha pro valor original** (`SEED_ADMIN_SENHA`) e restaura o
-`deveTrocarSenha` de antes; roda sempre, mesmo se algum passo falhar antes
-da troca acontecer — senão todo smoke test seguinte (todos fazem login como
-admin) quebraria.
+nova funcionando e com a antiga não. Usa um usuário de teste **dedicado**
+(criado via SQL direto, mesmo padrão do passo 9 de `smoke-test-fase2.ts`) —
+**nunca** a conta admin seedada. Limpeza é só `DELETE` do usuário (cascade
+em `refresh_tokens`), sem reversão de senha nenhuma.
+
+**Achado real (dolorido)**: a primeira versão deste script trocava e
+revertia a senha do próprio admin, usando `SEED_ADMIN_SENHA` como valor de
+reversão — e quebrou duas vezes seguidas. Primeiro porque a env var
+`SEED_ADMIN_SENHA` do container `api` ficava desatualizada depois de uma
+edição do `.env` sem recriar o container (`docker compose restart` não
+recarrega env var — precisa de `docker compose up -d`), então a reversão
+usava um valor diferente do `.env` atual. Corrigido isso, quebrou de novo
+por um motivo mais sério: `SEED_ADMIN_SENHA` no `.env` real deste projeto é
+`"123456"` (6 caracteres) — menor que o mínimo de 8 exigido pela própria
+API pra `novaSenha` —, então a PRÓPRIA reversão (que também é um
+`PATCH /auth/senha`) tomava `400` e nunca completava, deixando a senha real
+do admin travada no valor de teste. Um usuário descartável elimina a classe
+inteira do problema: não existe reversão pra dar errado, e a conta admin de
+verdade nunca é tocada.
 
 ```bash
 docker compose exec api npm run smoke:troca-senha
