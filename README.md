@@ -892,21 +892,23 @@ financeiro, mais sensível que só "status mudou de X pra Y".
 ## Itens de contrato
 
 Múltiplas linhas de especificação (espessura/largura/comprimento/volume/
-preço) dentro de UM contrato — ex.: várias combinações de dimensão, cada
-uma com seu próprio volume e preço por m³. Não é tabela de referência (sem
-CRUD de listagem próprio, sem `organizacaoId` direto) — mesmo padrão dos 4
-módulos setoriais, aninhado sob o contrato:
+preço/moeda) dentro de UM contrato — ex.: várias combinações de dimensão,
+cada uma com seu próprio volume, preço por m³ **e moeda** (itens do mesmo
+contrato podem estar em moedas diferentes entre si — bitolas cotadas em
+USD e outras em EUR no mesmo contrato, por exemplo). Não é tabela de
+referência (sem CRUD de listagem próprio, sem `organizacaoId` direto) —
+mesmo padrão dos 4 módulos setoriais, aninhado sob o contrato:
 
 ```bash
 GET    /contratos/:contratoId/itens             # lista todos os itens do contrato
-POST   /contratos/:contratoId/itens             # { espessuraMm, larguraMm, comprimentoMinMm, comprimentoMaxMm, volumeM3, precoPorM3Usd }
+POST   /contratos/:contratoId/itens             # { espessuraMm, larguraMm, comprimentoMinMm, comprimentoMaxMm, volumeM3, precoPorM3, moeda }
 PATCH  /contratos/:contratoId/itens/:itemId      # body parcial
 DELETE /contratos/:contratoId/itens/:itemId
 ```
 
 - Todo campo numérico é `Decimal` no banco, não `Float` — mesmo cuidado de
   precisão já usado pra dinheiro (`espessuraMm`/`larguraMm`/
-  `comprimentoMinMm`/`comprimentoMaxMm`/`volumeM3`/`precoPorM3Usd` entram
+  `comprimentoMinMm`/`comprimentoMaxMm`/`volumeM3`/`precoPorM3` entram
   em cálculo de volume/preço). Chegam na resposta da API como **string**
   (mesma decisão de `DetalhesFinanceiro`/`Contrato.valorTotalUsd`).
 - Todo campo precisa ser `> 0` (`400` senão) e **`comprimentoMaxMm` >=
@@ -916,6 +918,14 @@ DELETE /contratos/:contratoId/itens/:itemId
   vínculo Original/Aditivo em `contratos.routes.ts`) — editar só
   `comprimentoMaxMm` pra um valor menor que o `comprimentoMinMm` já salvo
   também responde `400`, não só quando os dois vêm juntos.
+- **`moeda`** (`string`, obrigatório): `USD`/`EUR`/`BRL`/`GBP`/`CNY` —
+  validado como **enum de verdade no backend** (`400` se ausente ou fora
+  da lista), lista compartilhada de `apps/api/src/lib/moedas.ts`
+  (`MOEDAS`) pra não duplicar o literal entre os schemas que precisam
+  validar moeda. Diferente de `Contrato.moedaValorTotal`, que só tem
+  validação de UI (ver comentário em `contrato-form.tsx`) — aqui a
+  validação é de propósito mais rígida: campo novo, por item, sem o
+  legado de `moedaValorTotal`.
 - Mesma checagem de `contratoId` (existe e pertence à sua organização antes
   de qualquer operação — `404` claro, nunca `500`) e mesma defesa em
   profundidade via RLS (policy `EXISTS` contra `contratos`) que os 4
@@ -935,16 +945,30 @@ DELETE /contratos/:contratoId/itens/:itemId
   continuam digitados manualmente, decisão já tomada antes desta rodada.
   Os itens são um detalhe complementar, **sem soma automática** pro volume/
   valor do contrato.
+- **Migration `item_contrato_moeda`**: o campo era `precoPorM3Usd`
+  (implicitamente sempre USD) até esta rodada — renomeado pra `precoPorM3`
+  e a moeda passou a ser um campo próprio. A migration usa
+  `RENAME COLUMN` (não `DROP`+`ADD`, que é o que o diff automático do
+  `prisma migrate dev` geraria sozinho pra esse tipo de mudança) pra
+  preservar o dado já salvo, e faz backfill de `moeda = 'USD'` pras linhas
+  existentes antes de tornar a coluna `NOT NULL` — todo item criado antes
+  desta migration tinha preço implicitamente em USD, então o backfill só
+  torna esse significado explícito nos dados já salvos.
 
 ### Smoke test automatizado (Itens de contrato)
 
 `apps/api/scripts/smoke-test-itens-contrato.ts` reaproveita o setup de
 referências+contrato de `smoke-test-fixtures.ts`. Cobre: lista vazia antes
-de qualquer item, criação de 3 itens com dimensões diferentes (incluindo um
-com `comprimentoMinMm === comprimentoMaxMm`, comprimento fixo), listagem,
-edição de um item (valor efetivo pós-merge continua correto pro resto dos
-campos), `comprimentoMaxMm < comprimentoMinMm` no `POST` e no `PATCH`
-(`400` nos dois casos), remoção de um item, usuário `Operacional` (sem
+de qualquer item, criação de 3 itens com dimensões **e moedas diferentes**
+(dois em USD, um em EUR — confirma que o mesmo contrato aceita e preserva
+moedas distintas por item, incluindo um com
+`comprimentoMinMm === comprimentoMaxMm`, comprimento fixo), listagem
+(confirma a ordem e as moedas de cada item), edição de um item (valor
+efetivo pós-merge continua correto pro resto dos campos, `moeda` incluída
+— não vem no `PATCH`, então precisa continuar igual),
+`comprimentoMaxMm < comprimentoMinMm` no `POST` e no `PATCH` (`400` nos
+dois casos), remoção de um item, item sem `moeda` (`400`), item com
+`moeda` fora da lista aceita (`400`), usuário `Operacional` (sem
 permissão — itens exige `Administrador`+`Comercial`, diferente dos
 setores) recebendo `200` no `GET` e `403` no `POST`, `404` em `GET`/`POST`
 com `contratoId` inexistente, e por fim confirma em
@@ -1558,8 +1582,9 @@ setores).
 **`src/features/contratos/itens/`** — tudo desta seção:
 
 - **`types.ts`**: `ItemContrato` (formato de `GET`, campos numéricos como
-  `string` — `Decimal` na API) e `ItemContratoPayload` (formato de envio,
-  campos como `number`).
+  `string` — `Decimal` na API; `moeda` como `Moeda`, tipo de
+  `@/lib/moedas.ts`) e `ItemContratoPayload` (formato de envio, campos
+  numéricos como `number`, `moeda` obrigatória).
 - **`hooks.ts`**: `useItensContrato` (lista, sem paginação — é uma listagem
   pequena por contrato, não uma tabela de referência) e um par de
   mutations por operação (`useCriarItemContrato`/`useEditarItemContrato`/
@@ -1577,15 +1602,34 @@ setores).
   (feedback mais rápido), a validação de verdade continua sendo o `400` do
   backend. Comprimento é mostrado como faixa ("2000 – 3000 mm") ou valor
   único ("2500 mm") quando `comprimentoMinMm === comprimentoMaxMm`.
-  Botões de adicionar/editar/remover só aparecem pra
+  `moeda` é um `<Select>` (não texto livre) no dialog — mesmo componente e
+  mesma lista (`@/lib/moedas.ts`, `MOEDAS`) do `<Select>` de
+  `moedaValorTotal` em `contrato-form.tsx`, os dois importam do mesmo
+  lugar pra não duplicar o literal das 5 moedas. A tabela ganhou uma
+  coluna "Moeda" própria (texto, não editável ali — a edição continua só
+  pelo dialog, mesmo padrão de todo o resto do item) e a coluna de preço
+  perdeu o `(US$)` fixo no cabeçalho (virou só "Preço/m³") — o valor não é
+  mais sempre dólar. Botões de adicionar/editar/remover só aparecem pra
   `Administrador`+`Comercial` (`canWriteReferences`, mesma permissão de
   escrita do contrato em si — reusada tal qual, não uma nova função).
-- **`somaVolume`**: soma de `volumeM3` de todos os itens, mostrada como
-  texto de apoio ("Soma dos itens: 12,50 m³ — não substitui o campo Volume
-  do contrato") — só ajuda visualmente quem está preenchendo a comparar
-  com o campo "Volume (m³)" do contrato; nunca escreve nesse campo nem
+- **`somaVolume`/`valorTotalPorMoeda`**: `somaVolume` soma `volumeM3` de
+  todos os itens direto — volume não depende de moeda, então continua uma
+  soma simples de sempre. `valorTotalPorMoeda` (novo, `itens-section.tsx`)
+  calcula `precoPorM3 × volumeM3` por item e agrupa o resultado por
+  `moeda` num `Record<string, number>` — quando todos os itens
+  compartilham a mesma moeda, o resultado tem uma única chave (a soma
+  "normal"); quando há mais de uma moeda entre os itens, tem uma chave por
+  moeda. Os dois casos são o MESMO objeto, só com tamanhos diferentes —
+  quem renderiza (`ItensSection`) não precisa de `if`/`else` pra decidir
+  entre "somar" ou "separar por moeda", só itera as chaves que existirem.
+  Mostrado como texto de apoio ("Soma dos itens: 15,00 m³ — não substitui
+  o campo Volume do contrato. Valor total: USD 5.000,00 | EUR 1.000,00")
+  — só ajuda visualmente quem está preenchendo a comparar com os campos
+  "Volume (m³)"/"Valor total" do contrato; nunca escreve nesses campos nem
   dispara nenhum `PATCH` em `/contratos/:id` (decisão explícita: itens não
-  substituem nem somam automaticamente pro volume/valor do contrato).
+  substituem nem somam automaticamente pro volume/valor do contrato — o
+  texto é só informativo, nunca soma valores de moedas diferentes como se
+  fossem a mesma unidade monetária).
 
 **Verificado de ponta a ponta num navegador real (Chrome, via
 claude-in-chrome)**, como Administrador, num contrato real: adicionado um
@@ -1598,6 +1642,19 @@ removido o segundo item (com o dialog de confirmação) — tabela e soma
 voltaram a refletir só o item restante. Console do navegador sem erros em
 nenhum passo.
 
+**Resumo por moeda, verificado de ponta a ponta no mesmo navegador**: com
+um único item (USD, preço 500 × volume 10) o texto mostrou "Valor total:
+USD 5.000,00" — uma chave só, sem separador. Adicionado um segundo item no
+MESMO contrato com moeda EUR (preço 200 × volume 5, escolhida no `<Select>`
+do dialog, confirmando as 5 opções USD/EUR/BRL/GBP/CNY aparecendo) — o
+texto virou "Soma dos itens: 15,00 m³ ... Valor total: USD 5.000,00 | EUR
+1.000,00": o volume somou os dois itens normalmente (não depende de
+moeda), e o valor separou por moeda em vez de somar `5.000 + 1.000` como
+se fossem a mesma unidade monetária — exatamente o comportamento pedido.
+Tabela mostrou a coluna "Moeda" com o valor certo em cada linha. Os dois
+itens de teste foram removidos ao final, sem deixar rastro no contrato
+real usado pro teste.
+
 **Achado de ambiente (não é bug do código)**: mesma flakiness de clique
 coordenado já documentada na Fase 3 (Radix `<Select>`) apareceu aqui em
 cliques sobre os campos do dialog de item — clique de mouse simulado
@@ -1609,14 +1666,17 @@ Também houve uma perda momentânea de conexão do CDP (screenshot/read_page
 travando com timeout) no meio do teste, resolvida abrindo uma nova aba —
 a API e o Vite continuaram respondendo normalmente o tempo todo (conferido
 via `curl` direto), confirmando que era só a ferramenta de automação, não
-a aplicação.
+a aplicação. Reapareceu (timeout de `Page.captureScreenshot`) ao clicar no
+`<Select>` de moeda do dialog de item — resolvido apenas esperando e
+tentando de novo, sem precisar de nova aba dessa vez; a API/Vite também
+não pararam de responder nesse intervalo.
 
 ## Estrutura
 
 ```
 apps/api/
   src/
-    lib/          # prisma client, jwt sign/verify, paginação, tradução de erros do Prisma
+    lib/          # prisma client, jwt sign/verify, paginação, tradução de erros do Prisma, moedas (MOEDAS)
     middleware/   # auth, tenant-scoping, roles, audit-logger
     modules/      # um módulo por entidade (auth, especies, produtos, importadores,
                    # representantes, status-contrato, eventos-pagamento, contratos,
@@ -1655,11 +1715,12 @@ apps/web/          # React + Vite — Fases 0, 1, 2, 3 e 4 prontas, ver seção 
         itens/       # seção "Especificações" da tela de detalhe (múltiplas linhas de item por
                      # contrato): types.ts, hooks.ts (GET lista + POST/PATCH/DELETE),
                      # itens-section.tsx (tabela + dialogs de criar/editar/remover, soma de
-                     # volume só informativa)
+                     # volume + valor total por moeda, só informativas)
     lib/          # api-client (fetch central + refreshSession deduplicado), auth-context
                    # (AuthProvider/useAuth), permissions (canWriteReferences, canWriteSector,
                    # canWriteEventosPagamento, canViewAuditoria), pagination (types
-                   # Paginated/PaginationMeta), query-client (TanStack Query), utils (cn)
+                   # Paginated/PaginationMeta), query-client (TanStack Query), moedas (MOEDAS,
+                   # reusada por contrato-form.tsx e itens-section.tsx), utils (cn)
     pages/        # login-page.tsx, trocar-senha-page.tsx
     routes/       # route-guards (ProtectedRoute, PublicOnlyRoute)
 packages/shared-types/ # types compartilhados (ainda vazio na Fase 0)

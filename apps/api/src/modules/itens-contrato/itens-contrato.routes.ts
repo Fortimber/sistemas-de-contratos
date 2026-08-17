@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { requireRole } from "../../middleware/roles.js";
+import { MOEDAS } from "../../lib/moedas.js";
 
 const itemFields = {
   // Decimal no banco (ver schema.prisma) — mesma decisão de precisão
@@ -9,12 +10,17 @@ const itemFields = {
   comprimentoMinMm: { type: "number", exclusiveMinimum: 0 },
   comprimentoMaxMm: { type: "number", exclusiveMinimum: 0 },
   volumeM3: { type: "number", exclusiveMinimum: 0 },
-  precoPorM3Usd: { type: "number", exclusiveMinimum: 0 },
+  precoPorM3: { type: "number", exclusiveMinimum: 0 },
+  // Diferente de Contrato.moedaValorTotal (só validação de UI, ver
+  // contrato-form.tsx) — aqui a moeda É validada como enum no backend:
+  // campo novo, itens do mesmo contrato podem ter moedas diferentes entre
+  // si, então não dá pra confiar só na formatação do frontend.
+  moeda: { type: "string", enum: MOEDAS },
 } as const;
 
 const createBodySchema = {
   type: "object",
-  required: ["espessuraMm", "larguraMm", "comprimentoMinMm", "comprimentoMaxMm", "volumeM3", "precoPorM3Usd"],
+  required: ["espessuraMm", "larguraMm", "comprimentoMinMm", "comprimentoMaxMm", "volumeM3", "precoPorM3", "moeda"],
   additionalProperties: false,
   properties: itemFields,
 } as const;
@@ -32,7 +38,8 @@ interface ItemFields {
   comprimentoMinMm: number;
   comprimentoMaxMm: number;
   volumeM3: number;
-  precoPorM3Usd: number;
+  precoPorM3: number;
+  moeda: (typeof MOEDAS)[number];
 }
 
 const WRITE_ROLES = requireRole("Administrador", "Comercial");

@@ -14,21 +14,23 @@ import {
 } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
+import { MOEDAS } from "@/lib/moedas";
 import { canWriteReferences } from "@/lib/permissions";
 import { useCriarItemContrato, useEditarItemContrato, useItensContrato, useRemoverItemContrato } from "./hooks";
 import type { ItemContrato, ItemContratoPayload } from "./types";
 
-/** [nome do campo, rótulo] — alimenta tanto o formulário quanto as mensagens de validação. */
-const FORM_FIELDS: [keyof ItemContratoPayload, string][] = [
+/** [nome do campo, rótulo] — números que compartilham a mesma validação "> 0" via superRefine; moeda fica de fora (é um <Select>, não number). */
+const NUMERIC_FIELDS: [Exclude<keyof ItemContratoPayload, "moeda">, string][] = [
   ["espessuraMm", "Espessura (mm)"],
   ["larguraMm", "Largura (mm)"],
   ["comprimentoMinMm", "Comprimento mínimo (mm)"],
   ["comprimentoMaxMm", "Comprimento máximo (mm)"],
   ["volumeM3", "Volume (m³)"],
-  ["precoPorM3Usd", "Preço por m³ (US$)"],
+  ["precoPorM3", "Preço por m³"],
 ];
 
 const DEFAULT_VALUES: FieldValues = {
@@ -37,13 +39,16 @@ const DEFAULT_VALUES: FieldValues = {
   comprimentoMinMm: "",
   comprimentoMaxMm: "",
   volumeM3: "",
-  precoPorM3Usd: "",
+  precoPorM3: "",
+  moeda: "USD",
 };
 
 // Espelha createBodySchema/patchBodySchema de POST/PATCH .../itens na API —
-// todo campo vive no formulário como string (nunca number), mesma decisão
-// de precisão de contrato-form.tsx/sector-form.tsx: a conversão só acontece
-// uma vez, em `toPayload`, na string exata que estava no campo.
+// todo campo numérico vive no formulário como string (nunca number), mesma
+// decisão de precisão de contrato-form.tsx/sector-form.tsx: a conversão só
+// acontece uma vez, em `toPayload`, na string exata que estava no campo.
+// `moeda` é obrigatório (z.enum, não z.string().optional()) — mesma lista
+// de MOEDAS reusada do <Select> de moedaValorTotal em contrato-form.tsx.
 const itemSchema = z
   .object({
     espessuraMm: z.string().min(1),
@@ -51,10 +56,11 @@ const itemSchema = z
     comprimentoMinMm: z.string().min(1),
     comprimentoMaxMm: z.string().min(1),
     volumeM3: z.string().min(1),
-    precoPorM3Usd: z.string().min(1),
+    precoPorM3: z.string().min(1),
+    moeda: z.enum(MOEDAS, { message: "Selecione a moeda." }),
   })
   .superRefine((values, ctx) => {
-    for (const [name, label] of FORM_FIELDS) {
+    for (const [name, label] of NUMERIC_FIELDS) {
       const n = Number(values[name]);
       if (values[name].trim() === "" || Number.isNaN(n) || n <= 0) {
         ctx.addIssue({ code: "custom", path: [name], message: `${label} precisa ser um número maior que 0.` });
@@ -78,7 +84,8 @@ function toFormValues(item: ItemContrato): FieldValues {
     comprimentoMinMm: item.comprimentoMinMm,
     comprimentoMaxMm: item.comprimentoMaxMm,
     volumeM3: item.volumeM3,
-    precoPorM3Usd: item.precoPorM3Usd,
+    precoPorM3: item.precoPorM3,
+    moeda: item.moeda,
   };
 }
 
@@ -89,7 +96,8 @@ function toPayload(values: FieldValues): ItemContratoPayload {
     comprimentoMinMm: Number(values.comprimentoMinMm),
     comprimentoMaxMm: Number(values.comprimentoMaxMm),
     volumeM3: Number(values.volumeM3),
-    precoPorM3Usd: Number(values.precoPorM3Usd),
+    precoPorM3: Number(values.precoPorM3),
+    moeda: values.moeda,
   };
 }
 
@@ -97,6 +105,28 @@ function formatComprimento(item: ItemContrato): string {
   return item.comprimentoMinMm === item.comprimentoMaxMm
     ? `${item.comprimentoMinMm} mm`
     : `${item.comprimentoMinMm} – ${item.comprimentoMaxMm} mm`;
+}
+
+function formatValor(valor: number): string {
+  return valor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/**
+ * Valor total (preço/m³ × volume) por item, agrupado por moeda — nunca soma
+ * itens de moedas diferentes como se fossem a mesma unidade monetária.
+ * Quando todos os itens do contrato compartilham a mesma moeda, o
+ * resultado tem uma única entrada (efetivamente a soma simples); quando há
+ * mais de uma moeda, tem uma entrada por moeda — quem consome isso
+ * (`ItensSection` abaixo) não precisa de lógica condicional própria pra
+ * decidir entre "somar" ou "separar por moeda", os dois casos são o MESMO
+ * objeto, só com tamanhos diferentes.
+ */
+function valorTotalPorMoeda(itens: ItemContrato[]): Record<string, number> {
+  return itens.reduce<Record<string, number>>((acc, item) => {
+    const valor = Number(item.precoPorM3) * Number(item.volumeM3);
+    acc[item.moeda] = (acc[item.moeda] ?? 0) + valor;
+    return acc;
+  }, {});
 }
 
 /**
@@ -165,7 +195,13 @@ export function ItensSection({ contratoId }: { contratoId: string }) {
 
   const isSaving = criarMutation.isPending || editarMutation.isPending;
   const itens = itensQuery.data ?? [];
+  // Volume não depende de moeda — soma direta, sem agrupamento.
   const somaVolume = itens.reduce((acc, item) => acc + Number(item.volumeM3), 0);
+  // Valor (preço/m³ × volume) depende de moeda — ver valorTotalPorMoeda
+  // acima: 1 entrada = soma simples (moeda única), 2+ entradas = resumo
+  // separado por moeda, nunca uma soma cega entre moedas diferentes.
+  const valorPorMoeda = valorTotalPorMoeda(itens);
+  const moedasComValor = Object.keys(valorPorMoeda);
 
   return (
     <Card>
@@ -197,7 +233,8 @@ export function ItensSection({ contratoId }: { contratoId: string }) {
                   <TableHead>Largura (mm)</TableHead>
                   <TableHead>Comprimento</TableHead>
                   <TableHead>Volume (m³)</TableHead>
-                  <TableHead>Preço/m³ (US$)</TableHead>
+                  <TableHead>Preço/m³</TableHead>
+                  <TableHead>Moeda</TableHead>
                   {canWrite && <TableHead className="text-right">Ações</TableHead>}
                 </TableRow>
               </TableHeader>
@@ -208,7 +245,8 @@ export function ItensSection({ contratoId }: { contratoId: string }) {
                     <TableCell>{item.larguraMm}</TableCell>
                     <TableCell>{formatComprimento(item)}</TableCell>
                     <TableCell>{item.volumeM3}</TableCell>
-                    <TableCell>{item.precoPorM3Usd}</TableCell>
+                    <TableCell>{item.precoPorM3}</TableCell>
+                    <TableCell>{item.moeda}</TableCell>
                     {canWrite && (
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
@@ -236,6 +274,13 @@ export function ItensSection({ contratoId }: { contratoId: string }) {
               Soma dos itens:{" "}
               {somaVolume.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} m³ — não
               substitui o campo Volume do contrato.
+              {moedasComValor.length > 0 && (
+                <>
+                  {" "}
+                  Valor total:{" "}
+                  {moedasComValor.map((moeda) => `${moeda} ${formatValor(valorPorMoeda[moeda])}`).join(" | ")}.
+                </>
+              )}
             </p>
           </>
         )}
@@ -251,7 +296,7 @@ export function ItensSection({ contratoId }: { contratoId: string }) {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4" noValidate>
               <div className="grid gap-4 sm:grid-cols-2">
-                {FORM_FIELDS.map(([name, label]) => (
+                {NUMERIC_FIELDS.map(([name, label]) => (
                   <FormField
                     key={name}
                     control={form.control}
@@ -267,6 +312,30 @@ export function ItensSection({ contratoId }: { contratoId: string }) {
                     )}
                   />
                 ))}
+                <FormField
+                  control={form.control}
+                  name="moeda"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Moeda</FormLabel>
+                      <Select value={field.value} onValueChange={field.onChange} disabled={isSaving}>
+                        <FormControl>
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {MOEDAS.map((v) => (
+                            <SelectItem key={v} value={v}>
+                              {v}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
 
               {formError && (

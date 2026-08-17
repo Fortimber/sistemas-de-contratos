@@ -1,7 +1,7 @@
 /**
  * Smoke test de itens de contrato (`itens_contrato`) — múltiplas linhas de
- * especificação (espessura/largura/comprimento/volume/preço) dentro de um
- * único contrato.
+ * especificação (espessura/largura/comprimento/volume/preço/moeda) dentro
+ * de um único contrato.
  *
  * Além do CRUD (criar, listar, editar, remover), confirma: validação de
  * comprimentoMaxMm >= comprimentoMinMm tanto no `POST` quanto no `PATCH`
@@ -9,9 +9,14 @@
  * com o que veio na chamada, não só o que foi enviado agora — ver
  * itens-contrato.routes.ts), permissão de escrita (Administrador+Comercial,
  * igual à escrita do próprio contrato — não Administrador+Operacional como
- * os setores), e que criação/edição de item aparecem em
+ * os setores), que criação/edição de item aparecem em
  * `GET /contratos/:id/auditoria` (ItemContrato está em AUDITED_MODELS, ver
- * middleware/audit-logger.ts) sem nenhum código extra pra isso.
+ * middleware/audit-logger.ts) sem nenhum código extra pra isso, e — desde
+ * que `moeda` passou a existir por item (cada item pode ter uma moeda
+ * diferente dos outros no mesmo contrato) — que ela é validada como enum
+ * de verdade no backend: obrigatória (`400` se ausente) e restrita à lista
+ * de `lib/moedas.ts` (`400` se fora dela), diferente de
+ * `Contrato.moedaValorTotal`, que só tem validação de UI.
  *
  * Reaproveita o setup de referências+contrato e o cliente HTTP já extraídos
  * em scripts/smoke-test-fixtures.ts e scripts/smoke-test-helpers.ts.
@@ -80,7 +85,7 @@ async function main() {
       },
     },
     {
-      name: "3) POST 3 itens com dimensões diferentes -> 201 cada, campos batem",
+      name: "3) POST 3 itens com dimensões e MOEDAS diferentes -> 201 cada, campos batem",
       run: async () => {
         const a = await api("POST", `/contratos/${contratoId}/itens`, {
           token: adminToken,
@@ -90,14 +95,18 @@ async function main() {
             comprimentoMinMm: 2000,
             comprimentoMaxMm: 3000,
             volumeM3: 12.5,
-            precoPorM3Usd: 450.5,
+            precoPorM3: 450.5,
+            moeda: "USD",
           },
         });
         assert(a.status === 201, `item A: esperado 201, veio ${a.status}: ${JSON.stringify(a.json)}`);
         assert(Number(a.json.espessuraMm) === 25.4, `espessuraMm esperado 25.4, veio ${a.json.espessuraMm}`);
         assert(typeof a.json.volumeM3 === "string", `volumeM3 deveria ser string, veio ${typeof a.json.volumeM3}`);
+        assert(a.json.moeda === "USD", `moeda do item A esperada USD, veio ${a.json.moeda}`);
         item1Id = a.json.id;
 
+        // Moeda diferente do item A, no MESMO contrato — o cenário real que
+        // motivou o campo existir por item, não por contrato.
         const b = await api("POST", `/contratos/${contratoId}/itens`, {
           token: adminToken,
           body: {
@@ -106,10 +115,12 @@ async function main() {
             comprimentoMinMm: 2500,
             comprimentoMaxMm: 2500,
             volumeM3: 8,
-            precoPorM3Usd: 500,
+            precoPorM3: 500,
+            moeda: "EUR",
           },
         });
         assert(b.status === 201, `item B: esperado 201, veio ${b.status}: ${JSON.stringify(b.json)}`);
+        assert(b.json.moeda === "EUR", `moeda do item B esperada EUR, veio ${b.json.moeda}`);
         item2Id = b.json.id;
 
         const c = await api("POST", `/contratos/${contratoId}/itens`, {
@@ -120,32 +131,39 @@ async function main() {
             comprimentoMinMm: 1000,
             comprimentoMaxMm: 1800,
             volumeM3: 5.25,
-            precoPorM3Usd: 420,
+            precoPorM3: 420,
+            moeda: "USD",
           },
         });
         assert(c.status === 201, `item C: esperado 201, veio ${c.status}: ${JSON.stringify(c.json)}`);
+        assert(c.json.moeda === "USD", `moeda do item C esperada USD, veio ${c.json.moeda}`);
       },
     },
     {
-      name: "4) GET itens -> lista os 3, ordenados por criação",
+      name: "4) GET itens -> lista os 3, ordenados por criação, com as moedas de cada um preservadas",
       run: async () => {
         const { status, json } = await api("GET", `/contratos/${contratoId}/itens`, { token: adminToken });
         assert(status === 200, `esperado 200, veio ${status}: ${JSON.stringify(json)}`);
         assert(json.length === 3, `esperado 3 itens, veio ${json.length}`);
         assert(json[0].id === item1Id, `primeiro item esperado ${item1Id}, veio ${json[0].id}`);
+        assert(
+          json.map((i: { moeda: string }) => i.moeda).join(",") === "USD,EUR,USD",
+          `moedas esperadas USD,EUR,USD (nessa ordem), veio ${json.map((i: { moeda: string }) => i.moeda).join(",")}`,
+        );
       },
     },
     {
-      name: "5) PATCH item 1 (volume e preço) -> atualiza, resto continua igual",
+      name: "5) PATCH item 1 (volume e preço) -> atualiza, resto (incluindo moeda) continua igual",
       run: async () => {
         const { status, json } = await api("PATCH", `/contratos/${contratoId}/itens/${item1Id}`, {
           token: adminToken,
-          body: { volumeM3: 13.75, precoPorM3Usd: 475 },
+          body: { volumeM3: 13.75, precoPorM3: 475 },
         });
         assert(status === 200, `esperado 200, veio ${status}: ${JSON.stringify(json)}`);
         assert(Number(json.volumeM3) === 13.75, `volumeM3 esperado 13.75, veio ${json.volumeM3}`);
-        assert(Number(json.precoPorM3Usd) === 475, `precoPorM3Usd esperado 475, veio ${json.precoPorM3Usd}`);
+        assert(Number(json.precoPorM3) === 475, `precoPorM3 esperado 475, veio ${json.precoPorM3}`);
         assert(Number(json.espessuraMm) === 25.4, `espessuraMm deveria continuar 25.4, veio ${json.espessuraMm}`);
+        assert(json.moeda === "USD", `moeda deveria continuar USD (não veio no PATCH), veio ${json.moeda}`);
       },
     },
     {
@@ -159,7 +177,8 @@ async function main() {
             comprimentoMinMm: 3000,
             comprimentoMaxMm: 2000,
             volumeM3: 1,
-            precoPorM3Usd: 400,
+            precoPorM3: 400,
+            moeda: "USD",
           },
         });
         assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
@@ -191,7 +210,45 @@ async function main() {
       },
     },
     {
-      name: "9) Usuário Operacional (sem permissão — itens exige Administrador+Comercial): GET -> 200, POST -> 403",
+      name: "9) POST item sem moeda -> 400",
+      run: async () => {
+        const { status, json } = await api("POST", `/contratos/${contratoId}/itens`, {
+          token: adminToken,
+          body: {
+            espessuraMm: 25,
+            larguraMm: 100,
+            comprimentoMinMm: 1000,
+            comprimentoMaxMm: 2000,
+            volumeM3: 1,
+            precoPorM3: 400,
+            // moeda ausente de propósito
+          },
+        });
+        assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
+        assert(/moeda/i.test(String(json?.message)), `mensagem deveria citar "moeda" (veio "${json?.message}")`);
+      },
+    },
+    {
+      name: "10) POST item com moeda fora da lista aceita -> 400",
+      run: async () => {
+        const { status, json } = await api("POST", `/contratos/${contratoId}/itens`, {
+          token: adminToken,
+          body: {
+            espessuraMm: 25,
+            larguraMm: 100,
+            comprimentoMinMm: 1000,
+            comprimentoMaxMm: 2000,
+            volumeM3: 1,
+            precoPorM3: 400,
+            moeda: "JPY", // fora de USD/EUR/BRL/GBP/CNY
+          },
+        });
+        assert(status === 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
+        assert(/moeda/i.test(String(json?.message)), `mensagem deveria citar "moeda" (veio "${json?.message}")`);
+      },
+    },
+    {
+      name: "11) Usuário Operacional (sem permissão — itens exige Administrador+Comercial): GET -> 200, POST -> 403",
       run: async () => {
         const senha = "senha-smoke-teste-123";
         const senhaHash = await bcrypt.hash(senha, 10);
@@ -223,14 +280,15 @@ async function main() {
             comprimentoMinMm: 1000,
             comprimentoMaxMm: 2000,
             volumeM3: 1,
-            precoPorM3Usd: 400,
+            precoPorM3: 400,
+            moeda: "USD",
           },
         });
         assert(post.status === 403, `POST: esperado 403, veio ${post.status}: ${JSON.stringify(post.json)}`);
       },
     },
     {
-      name: "10) GET/POST itens de contratoId inexistente -> 404",
+      name: "12) GET/POST itens de contratoId inexistente -> 404",
       run: async () => {
         const fakeId = randomUUID();
         const get = await api("GET", `/contratos/${fakeId}/itens`, { token: adminToken });
@@ -244,14 +302,15 @@ async function main() {
             comprimentoMinMm: 1000,
             comprimentoMaxMm: 2000,
             volumeM3: 1,
-            precoPorM3Usd: 400,
+            precoPorM3: 400,
+            moeda: "USD",
           },
         });
         assert(post.status === 404, `POST: esperado 404, veio ${post.status}: ${JSON.stringify(post.json)}`);
       },
     },
     {
-      name: "11) Auditoria: criação e edição do item 1 aparecem em GET /contratos/:id/auditoria",
+      name: "13) Auditoria: criação e edição do item 1 aparecem em GET /contratos/:id/auditoria",
       run: async () => {
         const { status, json } = await api("GET", `/contratos/${contratoId}/auditoria?pageSize=100`, {
           token: adminToken,

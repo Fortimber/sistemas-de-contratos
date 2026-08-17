@@ -7,6 +7,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { REFERENCE_OPTIONS_PAGE_SIZE, useImportadores, useProdutos, useRepresentantes, useStatusContrato } from "@/features/referencias/hooks";
+import { MOEDAS } from "@/lib/moedas";
 import { useContratos } from "./hooks";
 import { TIPO_CONTRATO_LABELS, type Contrato } from "./types";
 
@@ -16,9 +17,10 @@ const TIPO_FRETE = ["FOB", "CFR", "CIF"] as const;
 // schema.prisma) — a API não os valida como enum (só string não-vazia), mas
 // usá-los como <Select> aqui é orientação de UX/qualidade de dado, não uma
 // regra de segurança: um valor fora dessa lista mandado direto pra API
-// ainda seria aceito por ela.
+// ainda seria aceito por ela. MOEDAS é exceção — vem de @/lib/moedas
+// porque `itens-section.tsx` reusa a MESMA lista pra um campo que a API
+// (essa sim) valida como enum de verdade (ItemContrato.moeda).
 const LOCAIS = ["Belém", "Santarém", "Paragominas", "Portel", "Breves"] as const;
-const MOEDAS = ["USD", "EUR", "BRL", "GBP", "CNY"] as const;
 const MODALIDADES_PGT = ["À vista", "Parcelado"] as const;
 
 /** Sentinela do <Select> de contratoPaiId (campo opcional — Radix Select não aceita value="") */

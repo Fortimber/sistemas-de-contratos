@@ -483,7 +483,14 @@ model ItemContrato {
   comprimentoMinMm  Decimal  @map("comprimento_min_mm") @db.Decimal(10, 2)
   comprimentoMaxMm  Decimal  @map("comprimento_max_mm") @db.Decimal(10, 2)
   volumeM3          Decimal  @map("volume_m3") @db.Decimal(12, 4)
-  precoPorM3Usd     Decimal  @map("preco_por_m3_usd") @db.Decimal(14, 2)
+  precoPorM3        Decimal  @map("preco_por_m3") @db.Decimal(14, 2)
+  // Moeda do preço deste item — itens do mesmo contrato podem ter moedas
+  // diferentes entre si (ex.: bitolas cotadas em USD e outras em EUR).
+  // Validado como enum em itens-contrato.routes.ts (lib/moedas.ts) — mesma
+  // lista de valores de Contrato.moedaValorTotal, mas aqui a checagem É
+  // aplicada no backend (campo novo; moedaValorTotal só tem validação de
+  // UI, ver comentário em contrato-form.tsx no frontend).
+  moeda             String   @map("moeda")
   criadoEm          DateTime @default(now()) @map("criado_em")
   atualizadoEm      DateTime @updatedAt @map("atualizado_em")
 
